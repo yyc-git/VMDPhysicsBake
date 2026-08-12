@@ -1,7 +1,31 @@
-// 可视化烘焙验证 server：静态文件（仓库根）+ /api/save-bone-log 落盘
+// 可视化烘焙验证 server：静态文件（仓库根）+ /api/save-bone-log 落盘 + 自动转 VMD
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
+
+// 落盘后自动调用 bake-from-view 生成最终 VMD（子进程隔离，cwd=仓库根，120s 超时）
+function bakeView(jsonPath, cb) {
+  const child = spawn(process.execPath, ['src/tool/bake-from-view.cjs', jsonPath], {
+    cwd: root,
+    windowsHide: true,
+    timeout: 120000,
+    maxBuffer: 10 * 1024 * 1024
+  });
+  let out = '', err = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { err += d; });
+  child.on('error', cb);
+  child.on('exit', (code, signal) => {
+    if (code !== 0) {
+      const reason = signal ? 'killed by signal ' + signal + ' (可能超时 120s)' : 'exit code ' + code;
+      const detail = (err.trim() + ' ' + out.trim()).split('\n').filter(Boolean).slice(-6).join(' | ');
+      cb(new Error(reason + (detail ? ' | ' + detail : '')));
+      return;
+    }
+    cb(null, out);
+  });
+}
 
 const mime = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -30,8 +54,17 @@ http.createServer((req, res) => {
         const file = path.join(SAVE_DIR, `view-bake-bone-log-${char}-${anim}-${ts}.json`);
         fs.writeFileSync(file, JSON.stringify(data, null, 1), 'utf8');
         const entries = (data.entries || []).length;
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end(`saved ${entries} entries -> ${path.basename(file)}`);
+        const vmdRel = path.posix.join('output', `${char}_${anim}_view.vmd`);
+        // JSON 已落盘（不丢数据），再自动转 VMD；失败返回 500 + stderr 摘要
+        bakeView(file, (e) => {
+          if (e) {
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('bake failed: ' + e.message + ' | json saved: ' + path.basename(file));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, vmd: vmdRel, entries, json: path.basename(file) }));
+        });
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end('save failed: ' + e.message);

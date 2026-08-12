@@ -124,7 +124,7 @@ function loadAnim(idx: number) {
       '\n动画帧数(30fps): ' + Math.round(clip.duration * 30) +
       '\n物理: interval=' + CFG.physicsUpdateInterval + ' solver=' + CFG.solverIterations +
       '\nURL: ?fixed=60&interval=1&solver=10&warmup=60&speed=10 → 最高档物理' +
-      '\n产物: 播放完自动 POST /api/save-bone-log → output/view-bake-bone-log-' + CFG.char + '-<anim>-<ts>.json（采样）；转 VMD: node src/tool/bake-from-view.cjs <json> → output/' + CFG.char + '_<anim>_view.vmd（默认）' +
+      '\n产物: 播放完自动生成 VMD → output/' + CFG.char + '_<anim>_view.vmd（无需手动转）' +
       '\n初始化物理(warmup=' + CFG.warmup + ')…';
 
     // 上一动画若已挂到 helper，先移除（重建 mixer + physics，保证每动画从干净状态开始）
@@ -220,8 +220,16 @@ function tryExportLog() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  }).then(r => r.text()).then(t => {
-    hud.textContent += '\n✅ 已导出 ' + animName + ': ' + t;
+  }).then(r => {
+    if (!r.ok) return r.text().then(t => { throw new Error(t); });
+    return r.text();
+  }).then(t => {
+    let vmd = t, n = log.length;
+    try {
+      const j = JSON.parse(t);
+      if (j && typeof j.vmd === 'string') { vmd = j.vmd; n = j.entries; }
+    } catch { /* 非 JSON 响应，直接用原文 */ }
+    hud.textContent += '\n✅ 已导出 VMD: ' + vmd + '（采样 ' + n + ' 条）';
     // 播放下一个动画（最后一个完成后不再继续）
     curAnimIdx++;
     loadAnim(curAnimIdx);

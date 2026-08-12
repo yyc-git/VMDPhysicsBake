@@ -71,7 +71,7 @@ async function main() {
   // 2. headless 抓取（Playwright），逐动画导出
   console.log('[2/4] headless 抓取物理骨: ' + PAGE);
   const { chromium } = require('playwright');
-  const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-swiftshader'] });
+  const browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const errs = [];
   page.on('pageerror', e => errs.push(e.message));
