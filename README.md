@@ -88,7 +88,16 @@ const count = countPhysics('path/to/model.pmx');
 
 ## 🖥️ 运行 Demo（可视化烘焙）
 
-Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用页面内 Ammo.js 实时跑物理，逐帧记录物理骨采样，POST 给静态 server 落盘为 JSON，再经工具转成 VMD。
+Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用页面内 Ammo.js 实时跑物理（**与游戏运行时同款物理驱动**），逐帧记录物理骨采样，自动转成最终 VMD。
+
+> ⚠️ **两条链路怎么选（重要）**
+>
+> | 链路 | 命令 | 物理效果 | 适用场景 |
+> |------|------|---------|---------|
+> | **页面链路（推荐）** | `node src/tool/bake-view-oneclick.cjs`（或手动浏览器） | ⭐ **与游戏/原版一致**（MMDAnimationHelper 完整驱动 + 最高档物理） | 正式烘焙、追求效果 |
+> | 命令行模拟 | `yarn bake` | 一般（离线数值模拟，与浏览器物理有偏差） | 快速冒烟 / 自动化验证 |
+>
+> 同一 PMX+VMD，两条链路产物物理骨数据不同。**追求效果请用页面链路**；命令行档用于快速验证管线。
 
 ### 方式 A：一键全自动（推荐）
 
@@ -97,18 +106,18 @@ node src/tool/bake-view-oneclick.cjs
 # 可选参数：--vmds pickup --speed 10 --warmup 60 --out output --char hms --pmx <仓库内相对路径>
 ```
 
-链路：启动静态 server（8123）→ headless Chromium 打开页面 → 逐动画播放（**最高档物理 interval=1/solver=10 + warmup=60 + speed=K 加速**）→ 每帧记录物理骨 → 自动导出 JSON → bake-from-view 逐动画生成 VMD 到 `--out` 目录。
+链路：启动静态 server（8123）→ headless Chromium 打开页面 → 逐动画播放（**最高档物理 interval=1/solver=10 + warmup=60 + speed=K 加速**）→ 每帧记录物理骨 → **server 自动转 VMD** 到 `--out` 目录。
 
 ### 方式 B：手动浏览器验证
 
 ```bash
-node scripts/view-bake-server.cjs   # 静态 server，端口 8123（含 /api/save-bone-log 落盘）
+node scripts/view-bake-server.cjs   # 静态 server，端口 8123（含 /api/save-bone-log + 自动转 VMD）
 ```
 
-浏览器打开（**默认 VeryHigh 物理 interval=2/solver=6；烘焙高精度加 URL 参数**）：
+浏览器打开（**默认即最高档物理**；URL 参数可覆盖）：
 
 ```
-http://localhost:8123/demo/index.html?fixed=60&interval=1&solver=10&warmup=60&speed=10
+http://localhost:8123/demo/index.html
 ```
 
 URL 参数：
@@ -116,23 +125,29 @@ URL 参数：
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `fixed` | 0（rAF） | 固定步长 fps（如 60）；0 = 跟随浏览器 rAF |
-| `interval` | 2 | 物理更新间隔（1 = 最高档每渲染帧更新） |
-| `solver` | 6 | solver 迭代次数（10 = 最高档） |
+| `interval` | 1 | 物理更新间隔（1 = 每渲染帧更新，最高档） |
+| `solver` | 10 | solver 迭代次数（最高档） |
 | `warmup` | 60 | 物理预热帧数（头发预下落；0 = frame0 绑定姿态） |
 | `speed` | 1 | 加速倍数（fixed 模式下墙钟快 K 倍，物理结果逐位一致） |
 | `vmds` | pickup | 多动画逗号分隔，按顺序逐动画烘焙 |
 | `char` | hms | 导出文件名人物标签 |
 | `pmx` | HMS | 模型路径（demo/assets 相对路径） |
 
+页面 HUD 会显示当前物理档位与产物说明。**播放完自动导出**：
+
+```
+✅ 已导出 VMD: output/hms_pickup_view.vmd（采样 N 条）
+```
+
 ### 输出链路
 
 ```
-demo 页面 → POST /api/save-bone-log → output/view-bake-bone-log-<char>-<anim>-<时间戳>.json（骨骼采样）
-→ node src/tool/bake-from-view.cjs <capture.json> [out.vmd] → 最终 VMD
+demo 页面 → 播放完 POST /api/save-bone-log → server 落盘采样 JSON + 自动调 bake-from-view → output/<char>_<anim>_view.vmd（最终产物）
 ```
 
-- **纯命令行烘焙**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`
-- **可视化采样转 VMD**：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
+- **页面链路（推荐）**：播放完自动生成最终 VMD，无需手动转。中间 JSON（`output/view-bake-bone-log-*.json`）是内部采样留档（调试用），可忽略
+- **纯命令行模拟**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`（效果与页面链路有偏差，仅验证管线用）
+- **手动转 VMD**（仅当需要重跑转换）：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
 
 ## 📁 目录结构
 
