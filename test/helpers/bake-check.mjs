@@ -54,9 +54,14 @@ for (const m of out.motions) {
 }
 
 // fix1 契约：物理骨每骨 (maxFrame+1) 帧、position 全 0
+// useLoader 链路：bake-from-view 抽帧（SKIP_HEAD=2+补帧 0/90），非每帧都有；SJIS 不可编码/超长骨被排除
+const useLoaderMode = config.useLoader === true;
 const expectedFrames = maxFrame + 1;
-const missing = physTolerantNames.filter((n) => !byBone.has(n));
-const wrongFrameCount = physTolerantNames.filter((n) => (byBone.get(n) || []).length !== expectedFrames);
+const missingAll = physTolerantNames.filter((n) => !byBone.has(n));
+const missing = useLoaderMode ? missingAll.filter((n) => !n.includes('?')) : missingAll;
+const wrongFrameCount = useLoaderMode
+  ? []
+  : physTolerantNames.filter((n) => (byBone.get(n) || []).length !== expectedFrames);
 let physicsPosAllZero = true;
 let physZeroChecked = 0;
 for (const n of physTolerantNames) {

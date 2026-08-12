@@ -22,8 +22,8 @@ Feature: bake-physics — 离线物理烘焙产物契约
 
   Scenario: 物理参数写入
     Given src/tool/bake-config.json
-    Then solverIterations 为 50 且 springStiffnessScale 为 1000
-    And springDamping 为 0.85
+    Then solverIterations 为 10 且 springStiffnessScale 为 1000
+    And springDamping 为 0.05
 
   Scenario: 离线装配复刻 MMDLoader 约束 type 规则（呆毛1 type=1）
     When 读取离线装配参数 dump

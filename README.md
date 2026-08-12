@@ -60,6 +60,7 @@ node src/tool/count-physics.mjs "demo/assets/Tda HMS illustrious Prom Dress Ver1
 | `vmdRaw` | 原始动作 VMD | `../../demo/assets/pickup.vmd` |
 | `output` | 烘焙产物 VMD | `../../output/pickup_bake.vmd` |
 | `ammoSource` | `npm`（默认）\| `game`（仓库内 lib/ammo 的 wasm 版） | `npm` |
+| `useLoader` | `true` 时走 **MMDLoader.load2 链路**（与 demo 页面完全同构建同驱动，产物逐字节一致）；`false`/缺省走手动构建模拟 | `false` |
 | `helperDriver` | 是否用 MMDAnimationHelper 完整驱动（复刻游戏链路） | `false` |
 | `physicsParams` | spring/solver/阻尼/平衡点等物理参数 | 见 bake-config.json |
 | `zoneRules` | 分区调参（胸部 / 裙子碰撞 mask 等） | 见 bake-config.json |
@@ -95,9 +96,10 @@ Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用
 > | 链路 | 命令 | 物理效果 | 适用场景 |
 > |------|------|---------|---------|
 > | **页面链路（推荐）** | `node src/tool/bake-view-oneclick.cjs`（或手动浏览器） | ⭐ **与游戏/原版一致**（MMDAnimationHelper 完整驱动 + 最高档物理） | 正式烘焙、追求效果 |
-> | 命令行模拟 | `yarn bake` | 一般（离线数值模拟，与浏览器物理有偏差） | 快速冒烟 / 自动化验证 |
+> | **命令行（useLoader）** | `yarn bake`（bake-config.json 默认 `useLoader: true`） | ⭐ **与页面链路逐字节一致**（MMDLoader.load2 同构建 + 同驱动 + 同抽帧，V6 实测 bytes identical） | 正式烘焙 / 自动化验证 |
+> | 命令行模拟（旧） | `yarn bake`（无 useLoader） | 一般（离线数值模拟，与浏览器物理有偏差） | 快速冒烟 / 历史兼容 |
 >
-> 同一 PMX+VMD，两条链路产物物理骨数据不同。**追求效果请用页面链路**；命令行档用于快速验证管线。
+> `useLoader: true` 后命令行烘焙与 demo 页面链路产物**完全一致**（同一 PMX+VMD，物理骨逐字节相同）。
 
 ### 方式 A：一键全自动（推荐）
 
@@ -130,6 +132,7 @@ URL 参数：
 | `warmup` | 60 | 物理预热帧数（头发预下落；0 = frame0 绑定姿态） |
 | `speed` | 1 | 加速倍数（fixed 模式下墙钟快 K 倍，物理结果逐位一致） |
 | `vmds` | pickup | 多动画逗号分隔，按顺序逐动画烘焙 |
+| `useLoader` | true | `true` 时命令行烘焙走 MMDLoader.load2 链路（与页面一致） |
 | `char` | hms | 导出文件名人物标签 |
 | `pmx` | HMS | 模型路径（demo/assets 相对路径） |
 
@@ -146,7 +149,7 @@ demo 页面 → 播放完 POST /api/save-bone-log → server 落盘采样 JSON +
 ```
 
 - **页面链路（推荐）**：播放完自动生成最终 VMD，无需手动转。中间 JSON（`output/view-bake-bone-log-*.json`）是内部采样留档（调试用），可忽略
-- **纯命令行模拟**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`（效果与页面链路有偏差，仅验证管线用）
+- **纯命令行模拟**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`；**`useLoader: true` 时与页面链路逐字节一致**（推荐，见上方链路表）
 - **手动转 VMD**（仅当需要重跑转换）：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
 
 ## 📁 目录结构

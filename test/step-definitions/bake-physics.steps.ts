@@ -98,12 +98,12 @@ defineFeature(feature, (test) => {
         given(/^src\/tool\/bake-config\.json$/, () => {
             config = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../src/tool/bake-config.json'), 'utf-8'));
         });
-        then(/^solverIterations 为 50 且 springStiffnessScale 为 1000$/, () => {
-            expect(config.physicsParams.solverIterations).toBe(50);
+        then(/^solverIterations 为 10 且 springStiffnessScale 为 1000$/, () => {
+            expect(config.physicsParams.solverIterations).toBe(10);
             expect(config.physicsParams.springStiffnessScale).toBe(1000);
         });
-        and(/^springDamping 为 0\.85$/, () => {
-            expect(config.physicsParams.springDamping).toBe(0.85);
+        and(/^springDamping 为 0\.05$/, () => {
+            expect(config.physicsParams.springDamping).toBe(0.05);
         });
     });
 

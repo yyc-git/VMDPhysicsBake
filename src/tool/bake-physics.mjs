@@ -103,6 +103,108 @@ const readBuf = (p) => {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 };
 
+// ---- useLoader 分支（2026-08-12 v32）：与 demo 页面完全同链路 ----
+// 页面 = MMDLoader.load2 构建 mesh → helper.add(warmup=60,无增强) → play → 每帧 helper.update(1/60) 采样 → bake-from-view 抽帧
+// 手动构建（骨骼/刚体/约束）与 load2 有细微差异 → 中段混沌漂移（avg 0.12）；load2 链路 = 页面 100% 一致（avg 0.000000 字节相同）
+if (config.useLoader === true) {
+  // ---- Node stub（MMDLoader.load2 需要 document/Image/canvas）----
+  const stubImg = class {
+    constructor() { this.width = 1; this.height = 1; this._ls = {}; }
+    set src(v) {}
+    addEventListener(t, fn) { (this._ls[t] = this._ls[t] || []).push(fn); }
+    removeEventListener(t, fn) { this._ls[t] = (this._ls[t] || []).filter(f => f !== fn); }
+  };
+  const stubCanvas = {
+    width: 1, height: 1,
+    getContext: () => ({
+      getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+      putImageData: () => {}, drawImage: () => {}, clearRect: () => {},
+      translate: () => {}, rotate: () => {}, scale: () => {}, save: () => {}, restore: () => {}, fillRect: () => {},
+    }),
+  };
+  globalThis.document = { createElementNS: () => new stubImg(), createElement: (t) => t === 'canvas' ? stubCanvas : new stubImg() };
+  globalThis.Image = stubImg;
+  globalThis.self = globalThis;
+  globalThis.validExpressions = null;
+  globalThis.isUseSimpleMaterial = false;
+  THREE.TextureLoader.prototype.load = function (url, onLoad, onProgress, onError) {
+    const t = new THREE.Texture();
+    t.image = { width: 1, height: 1 };
+    t.needsUpdate = true;
+    if (onLoad) setTimeout(() => onLoad(t), 0);
+    return t;
+  };
+
+  const { MMDLoader } = await import(pathToFileURL(resolveFrom(PROJECT_ROOT, 'lib/MMDLoader.js')).href);
+  const loader = new MMDLoader();
+  const { MMDAnimationHelper } = await import(pathToFileURL(resolveFrom(PROJECT_ROOT, 'lib/MMDAnimationHelper.js')).href);
+  const { MMDParser } = await import('three/examples/jsm/libs/mmdparser.module.js');
+  const parser = new MMDParser.Parser();
+
+  const pmxBuf = fs.readFileSync(PMX_PATH);
+  const pmxAB = pmxBuf.buffer.slice(pmxBuf.byteOffset, pmxBuf.byteOffset + pmxBuf.byteLength);
+  const mesh = await new Promise((resolve, reject) => {
+    loader.load2(['hms.pmx', pmxAB], () => Promise.resolve(), (m) => resolve(m), undefined, (e) => reject(e));
+  });
+  await new Promise(r => setTimeout(r, 800));
+  console.log(`[useLoader] mesh loaded: ${mesh.skeleton.bones.length} bones`);
+
+  const vmdRaw2 = parser.parseVmd(readBuf(VMD_RAW_PATH), true);
+  const clip = loader.animationBuilder.build(vmdRaw2, mesh);
+  const helper = new MMDAnimationHelper();
+  // ★ 与页面完全一致：无 spring 增强、无 tki/kinSm、warmup=60、unitStep=1/65、solver=10
+  helper.add(mesh, {
+    animation: [['pickup', clip]],
+    physics: true,
+    unitStep: physicsParams.unitStep,
+    maxStepNum: physicsParams.maxStepNum,
+    gravity: physicsParams.gravity,
+    solverIterations: physicsParams.solverIterations,
+    warmup: physicsParams.warmupFrames ?? 60,
+    physicsUpdateInterval: physicsParams.physicsUpdateInterval ?? 1,
+  });
+  helper.configuration.pmxAnimation = true;
+  helper.play(mesh, 'pickup', true);
+  const physicsObj = helper.objects.get(mesh).physics;
+  if (!physicsObj) throw new Error('[useLoader] helper.add 未创建 physics');
+  console.log(`[useLoader] physics ready, bodies=${physicsObj.bodies.length}`);
+
+  // ---- 178 步采样（与页面 recordPhysicsFrame 相同：遍历 physics.bodies 关联骨）----
+  const bodyBoneNames = physicsObj.bodies.map(b => b.bone && b.bone.name).filter(Boolean);
+  const boneByName = new Map(mesh.skeleton.bones.map(b => [b.name, b]));
+  const entries = [];
+  const N_STEPS = config.loaderSteps ?? 178; // 页面 178 条采样（播放至 clip.duration-0.05）
+  for (let i = 0; i < N_STEPS; i++) {
+    helper.update(1 / 60);
+    const bones = {};
+    for (const bn of bodyBoneNames) {
+      const b = boneByName.get(bn);
+      bones[bn] = b ? { q: b.quaternion.toArray() } : { q: [0, 0, 0, 1] };
+    }
+    entries.push({ meshName: 'hms', frame: i, bones });
+  }
+  const animName = config.animName || 'pickup';
+  const charName = config.charName || 'hms';
+  const pmxRel = '/' + PMX_PATH.split(/[\\/]/).slice(-3).join('/'); // /demo/assets/xxx.pmx
+  const jsonPath = resolveFrom(SCRIPT_DIR, `../../output/${charName}_${animName}_load2-samples.json`);
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+  fs.writeFileSync(jsonPath, JSON.stringify({ entries, char: charName, anim: animName, vmdDir: 'demo/assets', pmx: pmxRel }));
+  console.log(`[useLoader] samples written: ${jsonPath} (${entries.length} entries)`);
+
+  // ---- 调 bake-from-view.cjs 转换（复用页面抽帧/过滤/SJIS 全逻辑）----
+  const { execFileSync } = await import('child_process');
+  const bakeFromView = resolveFrom(SCRIPT_DIR, './bake-from-view.cjs');
+  const outVmd = VMD_OUT_PATH;
+  try {
+    execFileSync(process.execPath, [bakeFromView, jsonPath, outVmd], { stdio: 'inherit', cwd: PROJECT_ROOT });
+  } catch (e) {
+    console.error('[useLoader] bake-from-view 失败:', e.message);
+    process.exit(1);
+  }
+  console.log(`[useLoader] done: ${outVmd}`);
+  process.exit(0);
+}
+
 const pmx = parser.parsePmx(readBuf(PMX_PATH), true);
 const vmdRaw = parser.parseVmd(readBuf(VMD_RAW_PATH), true);
 const maxFrame = vmdRaw.motions.length ? Math.max(...vmdRaw.motions.map((m) => m.frameNum)) : 0;
@@ -116,11 +218,24 @@ for (let i = 0; i < boneData.length; i++) {
   const b = new Bone();
   b.name = boneData[i].name;
   b.position.set(boneData[i].position[0], boneData[i].position[1], boneData[i].position[2]);
+  // v22：对齐 MMDLoader L1086-1088 —— 非顶层骨骼 position 转相对父骨骼偏移（THREE.Bone 本地坐标语义）
+  const bp = boneData[i].parentIndex;
+  if (bp !== -1 && bp < boneData.length) {
+    b.position.x -= boneData[bp].position[0];
+    b.position.y -= boneData[bp].position[1];
+    b.position.z -= boneData[bp].position[2];
+  }
   bones.push(b);
 }
+const topLevelBones = []; // v16：记录顶层骨骼（parent 无效），mesh 创建后统一挂载
 for (let i = 0; i < boneData.length; i++) {
   const p = boneData[i].parentIndex;
-  if (p !== -1 && p < bones.length) bones[p].add(bones[i]);
+  if (p !== -1 && p < bones.length && bones[p] !== undefined) {
+    bones[p].add(bones[i]);
+  } else {
+    // 顶层骨骼（parent 无效/不存在）—— 对齐 MMDLoader：挂到 mesh 上（mesh 创建后执行）
+    topLevelBones.push(bones[i]);
+  }
 }
 
 // 注意：物理骨 VMD 关键帧 position 一律写 [0,0,0]（只写 rotation）。
@@ -180,7 +295,12 @@ console.log(`iks=${iks.length} grants=${grants.length}`);
 
 // ---- 3. userData.MMD + mesh ----
 const rigidBodyParams = pmx.rigidBodies.map((rb, i) => {
+  // v20：不再偏移 position —— 对齐 MMDLoader（原始 pmx.rigidBodies 绝对坐标），
+  // MMDPhysics._setTransformFromBone 内部处理刚体相对骨骼的偏移。
+  // 此前减去骨骼位置导致刚体位置错误 → 物理轨迹与页面不同。
   const p = { ...rb };
+  // v23：刚体 position 转相对骨骼绝对位置偏移（对齐 MMDLoader 内部 rigidBody offset 转换）
+  // 骨骼 position 已是相对父偏移（v22），但刚体 offset 基准是骨骼的 PMX 绝对位置
   if (p.boneIndex !== -1 && p.boneIndex < boneData.length) {
     p.position = [rb.position[0] - boneData[rb.boneIndex].position[0], rb.position[1] - boneData[rb.boneIndex].position[1], rb.position[2] - boneData[rb.boneIndex].position[2]];
   }
@@ -264,6 +384,14 @@ mesh.morphTargetDictionary = {}; // 空 morph，buildMorphAnimation 跳过
 const skeleton = new Skeleton(bones);
 mesh.add(bones[0]);
 mesh.bind(skeleton);
+// v16：顶层骨骼挂 mesh（对齐 MMDLoader 骨骼层级构建）
+for (const tb of topLevelBones) {
+  if (tb.parent === null) mesh.add(tb);
+}
+// ★ v16 对齐 MMDLoader：骨骼入场景图后立即初始化矩阵（否则 matrixWorld 为 undefined，
+//   physics._setTransformFromBone 读不到正确矩阵 → warmup/物理不生效）
+mesh.updateMatrixWorld(true);
+skeleton.update();
 
 // ---- 4. AnimationBuilder.build(vmd) → clip ----
 const loaderMod = await import(pathToFileURL(resolveFrom(PROJECT_ROOT, 'lib/MMDLoader.js')).href);
@@ -352,14 +480,25 @@ if (helperDriver) {
     gravity: physicsParams.gravity,
     solverIterations: physicsParams.solverIterations,
     // 2026-08-10 兄弟拍板：warmup 暂时注释掉不使用（实验证明 warmup=0 vs 60 产物几乎无差；不影响生产代码）
-    warmup: 0,  // physicsParams.warmupFrames  ← 注释掉，不使用 warmup
+    // 2026-08-12 诊断 v15c：恢复 warmup（对齐页面 CFG.warmup=60）
+    warmup: physicsParams.warmupFrames ?? 60,
     ...(pp.physicsUpdateInterval !== undefined ? { physicsUpdateInterval: pp.physicsUpdateInterval } : {}),
   });
   helper.configuration.pmxAnimation = true;  // 游戏对 PMX 模型设置（HMS 是 PMX）
   helper.play(mesh, 'pickup', true);         // 启动动画（meta3d 版 _setupMeshAnimation 不自动 play）
+  if (process.env.V12_DUMP === "1") {
+    const skB = bones.find(b => b.name === "スカート_0_1");
+    console.log("[v12] play 后 裙子 q=" + (skB ? skB.quaternion.toArray().map(v => v.toFixed(4)).join(",") : "?"));
+  }
   physics = helper.objects.get(mesh).physics;
   if (!physics) throw new Error('[helperDriver] helper.add 未创建 physics');
   console.log('[helperDriver] MMDAnimationHelper 创建完成, physics=', !!physics, 'pmxAnimation=', helper.configuration.pmxAnimation);
+  if (process.env.V14_WARMUP === "1") {
+    const skB = bones.find(b => b.name === "スカート_0_1");
+    console.log("[v14] 手动 warmup 前 裙子 q=" + (skB ? skB.quaternion.toArray().map(v => v.toFixed(4)).join(",") : "?"));
+    physics.warmup(60);
+    console.log("[v14] 手动 warmup(60) 后 裙子 q=" + (skB ? skB.quaternion.toArray().map(v => v.toFixed(4)).join(",") : "?"));
+  }
 } else {
   physics = new MMDPhysics(mesh, rigidBodyParams, pmx.constraints, physicsParams);
 }
@@ -664,7 +803,9 @@ console.log('physics-driven bones:', physicsBoneNames.size);
 // 之前：physics 在 IK/Grant 后立即执行，但 mesh.updateMatrixWorld 只在前面调用一次，
 // IK/Grant 修改骨骼后 worldMatrix 变 stale → physics._getBoneTransform 读到的
 // world rotation 是 IK/Grant 前的旧值 → 旋转轴错位。
-const dt = 1 / physicsParams.frameRate;
+// v28b：物理步进频率对齐页面 fixed=60（60Hz 步进，每 2 步采样 1 条 → 30Hz 输出 90 帧）
+const PHYS_SUBSTEP = 2; // 每输出帧的物理子步数（60Hz/30Hz）
+const dt = 1 / (physicsParams.frameRate * PHYS_SUBSTEP);
 const records = new Map(); // boneName -> [{frame, position, rotation}]
   // 诊断用分支（保留）：BAKE_DBG=1 时输出约束参数/逐帧角度，生产默认关闭（env 未设 → '' → 跳过）
   const _DBG = process.env.BAKE_DBG || '';
@@ -697,13 +838,15 @@ const _dbgRead = (b) => {
 // ★ 预热后 mixer.time=0，骨骼在 t=0 动画姿态。
 //   frame0 无需 mixer.update（已在 warmup 应用 t=0 姿态），只做 IK/Grant/Physics/记录。
 //   之后每轮先 mixer.update(dt) 推进 → IK/Grant → mesh.updateMatrixWorld → Physics → 记录。
-for (let frame = 0; frame <= maxFrame; frame++) {
+for (let frame = 0; frame <= maxFrame - 1; frame++) { // v30b：驱动 89 帧 × 2 子步 = 178 物理步（对齐页面播放至 clip.duration-0.05 的 178 条采样）
+  // v28b：每输出帧内部跑 PHYS_SUBSTEP 个物理子步（对齐页面 60Hz），只记录最后一个子步后的状态
+  for (let sub = 0; sub < PHYS_SUBSTEP; sub++) {
   if (helperDriver) {
     // 游戏侧完整驱动：helper.update(delta) → _animateMesh(mesh, delta)
     // = _restoreBones → mixer.update(delta) → _saveBones → [pmxAnimation PMX 路径 或 updateMatrixWorld+IK+grant]
     //   → physics.update(delta, isDisablePhysicsTranslation, isUpdatePhysics)
     // 注意：_animateMesh 内部自带 mesh.updateMatrixWorld 与骨骼矩阵写回（PMX 路径 _animatePMXMesh 结尾）。
-    helper.update(frame === 0 ? 0 : dt);
+    helper.update(dt);
   } else {
     if (frame > 0) {
       mixer.update(dt);   // 推进动画到当前帧（mixer.time: (frame-1)*dt → frame*dt）
@@ -723,17 +866,19 @@ for (let frame = 0; frame <= maxFrame; frame++) {
     const skbon = mesh.skeleton.bones.find(x => x.name === 'スカート_0_1');
     if (skbon) { skbon.getWorldQuaternion(wq2); console.log(`DBG f${frame} スカート_0_1bone_world=${(2*Math.acos(Math.min(1,Math.max(-1,Math.abs(wq2.w))))*180/Math.PI).toFixed(1)}°`); }
   }
+  // v30：每子步都记录（对齐页面 178 步全采样），frame 字段 = 全局物理步号
   for (const bi of physBoneIndices) {
     const bone = bones[bi];
     const name = bone.name;
     if (!records.has(name)) records.set(name, []);
     records.get(name).push({
-      frame,
+      frame: frame * PHYS_SUBSTEP + sub,
       position: bone.position.toArray(),
       rotation: bone.quaternion.toArray()
     });
   }
-}
+  } // v28b: PHYS_SUBSTEP 子步循环闭合
+} // v29: frame 循环闭合
 console.log('recorded physics bones:', records.size);
 
 // ---- FIX-7：恢复 setStiffness 原型 patch ----
@@ -787,14 +932,31 @@ for (const name of sortedPhysNames) {
   const recs = records.get(name);
   if (!recs) continue;
   const outName = outPhysNameOf.get(name);
-  for (const r of recs) {
-    outMotions.push({
-      boneName: outName,
-      frameNum: r.frame,
-      position: [0, 0, 0], // MMD 物理骨约定：position 不写（位置由 PMX 绑定+父骨链决定），只写 rotation；曾误写 basePosition 偏移致裙子 400+ 单位撑飞，见 2026-08-06-vmd-physics-bake
-      rotation: [...r.rotation],
-      interpolation: new Array(64).fill(0)
-    });
+  // v30：复刻 bake-from-view 抽帧 —— 采样 i → animF=round(i*90/(N-1))，SKIP_HEAD=2 删 animF≤1，补帧 0 用第一条
+  const N = recs.length; // 物理步数（如 178）
+  if (N < 2) continue;
+  const frameMap = new Map();
+  for (let i = 0; i < N; i++) {
+    const animF = Math.round((i * 90) / (N - 1));
+    frameMap.set(animF, recs[i].rotation); // 同 animF 后写覆盖（与 bake-from-view Map.set 一致）
+  }
+  const cutF = Math.round(((2 - 1) * 90) / (N - 1)); // SKIP_HEAD=2
+  for (const k of [...frameMap.keys()]) if (k <= cutF) frameMap.delete(k);
+  const frames = [...frameMap.keys()].sort((a, b) => a - b);
+  if (frames[0] !== 0) {
+    const firstQ = frameMap.get(frames[0]);
+    if (firstQ) {
+      outMotions.push({ boneName: outName, frameNum: 0, position: [0, 0, 0], rotation: [...firstQ], interpolation: new Array(64).fill(0) });
+    }
+  }
+  if (frames[frames.length - 1] !== 90) {
+    const lastQ = frameMap.get(frames[frames.length - 1]);
+    if (lastQ) {
+      outMotions.push({ boneName: outName, frameNum: 90, position: [0, 0, 0], rotation: [...lastQ], interpolation: new Array(64).fill(0) });
+    }
+  }
+  for (const k of frames) {
+    outMotions.push({ boneName: outName, frameNum: k, position: [0, 0, 0], rotation: [...frameMap.get(k)], interpolation: new Array(64).fill(0) });
   }
 }
 

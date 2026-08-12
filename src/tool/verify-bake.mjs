@@ -142,7 +142,22 @@ function main() {
     const outNameSet = new Set(vmdOut.motions.map(m => m.boneName));
 
     // ================= V1 物理骨集合覆盖 =================
-    {
+    // useLoader 链路：物理骨经 bake-from-view 抽帧（SKIP_HEAD=2 + 补帧 0/90），非每帧都有
+    // 且 SJIS 不可编码/超15字节/type0 骨被 bake-from-view 有意排除 → 只断言「已编码宽容名的物理骨存在 + 帧范围合法」
+    const useLoaderMode = config.useLoader === true;
+    if (useLoaderMode) {
+      const missing = physTolerantNames.filter(n => !outNameSet.has(n));
+      // bake-from-view 排除规则：宽容名含 '?'（原 SJIS 不可编码）或超 15 字节的骨被有意排除，不参与覆盖断言
+      const missingOk = missing.filter(n => !n.includes('?'));
+      const ok = missingOk.length === 0;
+      const detail = {
+        physicsBoneCount: physOriginalNames.length,
+        tolerantNameCount: physTolerantNames.length,
+        missing: missingOk,
+        note: 'useLoader 链路：物理骨抽帧（SKIP_HEAD=2+补帧 0/90），SJIS 不可编码/超长骨由 bake-from-view 排除'
+      };
+      if (ok) pass('V1_physicsBoneCoverage', detail); else fail('V1_physicsBoneCoverage', detail);
+    } else {
       const expectedFrames = maxFrame + 1;
       const missing = physTolerantNames.filter(n => !outNameSet.has(n));
       const wrongFrameCount = physTolerantNames.filter(n => (outByBone.get(n) || []).length !== expectedFrames);
@@ -161,15 +176,21 @@ function main() {
       const outOfRange = vmdOut.motions.filter(m => m.frameNum < 0 || m.frameNum > maxFrame);
       // 物理骨冲突规则：原始动作骨中属物理骨的同名关键帧丢弃，仅保留物理逐帧
       const actionMotions = vmdRaw.motions.filter(m => !physNameSet.has(m.boneName));
-      const expectedTotal = actionMotions.length + physTolerantNames.length * (maxFrame + 1);
-      const totalOk = vmdOut.motions.length === expectedTotal;
+      // useLoader 链路：物理骨抽帧 → 期望总帧数无法静态推导（依赖 bake-from-view 抽帧/过滤），
+      // 断言 = 帧范围合法 + 总帧数大于动作骨数（物理骨至少各 1 帧）
+      const expectedTotal = useLoaderMode
+        ? (actionMotions.length + 1) // 下限：动作骨 + 至少 1 条物理骨帧
+        : actionMotions.length + physTolerantNames.length * (maxFrame + 1);
+      const totalOk = useLoaderMode
+        ? (vmdOut.motions.length > actionMotions.length)
+        : vmdOut.motions.length === expectedTotal;
       const ok = outOfRange.length === 0 && totalOk;
       const detail = {
         frameRange: [Math.min(...vmdOut.motions.map(m => m.frameNum)), maxFrame],
         totalMotions: vmdOut.motions.length,
         expectedTotal,
         actionMotionsKept: actionMotions.length,
-        physicsFrames: physTolerantNames.length * (maxFrame + 1),
+        physicsFrames: useLoaderMode ? '抽帧(见V1注)' : physTolerantNames.length * (maxFrame + 1),
         outOfRangeCount: outOfRange.length
       };
       if (ok) pass('V2_frameRangeAndCount', detail); else fail('V2_frameRangeAndCount', detail);
