@@ -7,7 +7,6 @@ import * as THREE from 'three';
 import { Skeleton, SkinnedMesh, Bone, BufferGeometry } from 'three';
 import fs from 'fs';
 import path from 'path';
-import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 // ---- Node ESM hook：lib/ 内 webpack 风格 import + pako 命名导出（见 resolve-ext.mjs / pako-esm-hook.mjs）----
@@ -82,6 +81,8 @@ const kinematicSmoothing = {
 const ammoSource = config.ammoSource || 'npm';
 let AmmoModule;
 if (ammoSource === 'game') {
+  // createRequire 仅 game 分支使用（加载 CJS 版 ammo.wasm.js 工厂函数），默认 npm 分支不引入
+  const { createRequire } = await import('module');
   const GAME_AMMO_DIR = path.resolve(PROJECT_ROOT, 'lib/ammo');
   const ammoRequire = createRequire(pathToFileURL(GAME_AMMO_DIR).href);
   const ammoFactory = ammoRequire(path.join(GAME_AMMO_DIR, 'ammo.wasm.js'));
@@ -329,7 +330,7 @@ const _origInitConstraints = MMDPhysics.prototype._initConstraints;
 if (typeof _origInitConstraints === 'function') {
   MMDPhysics.prototype._initConstraints = function (constraintParams) {
     for (const b of this.bodies) {
-      try { b.reset(); } catch (e) {}
+      try { b.reset(); } catch (e) {} // Ammo binding 防御性调用，传参失败忽略
     }
     return _origInitConstraints.call(this, constraintParams);
   };
@@ -429,7 +430,7 @@ for (const c of physics.constraints) {
   //   游戏侧无此覆盖→X轴主导（正确）。STOP_CFM 同理，游戏侧 CFM=0（默认）。
   //   非锁定轴若 zone 指定 jointStopErp 则覆盖（如裙子 0.5 防穿腿），否则保持 MMDPhysics 默认。
   if (typeof cst.setParam === 'function') {
-    try {
+    try { // Ammo binding 防御性调用：setParam 传参失败忽略（不同 Ammo 版本 API 面差异）
       for (let i = 0; i < 6; i++) {
         const isLinear = i < 3;
         const lo = isLinear ? p.translationLimitation1[i] : p.rotationLimitation1[i - 3];
@@ -454,7 +455,7 @@ for (const c of physics.constraints) {
   // ★ fix: 仅对含 spring 的约束放宽限位（垂直链约束有 spring，水平环约束无 spring，后者保持原 PMX 限位以维持环形状）
   const hasAngularSpring = sr && sr.some(v => v !== 0);
   if (zc.rotationLimitScale !== undefined && hasAngularSpring) {
-    try {
+    try { // Ammo binding 防御性调用：setAngular*Limit 传参失败忽略
       const scaleArr = Array.isArray(zc.rotationLimitScale) ? zc.rotationLimitScale : [zc.rotationLimitScale, zc.rotationLimitScale, zc.rotationLimitScale];
       const unlockRangeArr = zc.unlockAngularRange;
       const lo = [0, 0, 0], hi = [0, 0, 0];
@@ -491,7 +492,7 @@ for (const c of physics.constraints) {
   }
   // zone 级平动限位覆盖：translationLimitScale（配合 unlock 测试用）
   if (zc.translationLimitScale !== undefined && zc.translationLimitScale > 0) {
-    try {
+    try { // Ammo binding 防御性调用：setLinear*Limit 传参失败忽略
       const s = zc.translationLimitScale;
       const lo = [0, 0, 0], hi = [0, 0, 0];
       for (let i = 0; i < 3; i++) {
@@ -514,7 +515,7 @@ for (const c of physics.constraints) {
   //   'none'   不调用    → 平衡点保持默认 0（对齐 MMDPhysics.js 游戏侧行为）
   if (typeof cst.setEquilibriumPoint === 'function') {
     const eqMode = physicsParams.equilibriumPoint ?? 'all';
-    try {
+    try { // Ammo binding 防御性调用：setEquilibriumPoint 传参失败忽略
       if (eqMode === 'spring') {
         for (let i = 0; i < 3; i++) {
           if (sp[i] !== 0) cst.setEquilibriumPoint(i);
@@ -526,12 +527,12 @@ for (const c of physics.constraints) {
     } catch (e) {}
   }
   if (typeof cst.setDamping === 'function') {
-    try { for (let i = 0; i < 6; i++) cst.setDamping(i, zc.springDamping ?? SPRING_DAMPING); } catch (e) {}
+    try { for (let i = 0; i < 6; i++) cst.setDamping(i, zc.springDamping ?? SPRING_DAMPING); } catch (e) {} // Ammo binding 防御性调用，setDamping 失败忽略
   }
   // zone 级 spring stiffness 覆盖：global springStiffnessScale 已通过 setStiffness patch（÷1000）生效，
   // 此处用 _origSetStiffness 直接写（raw ÷ zone 分频），避免被 patch 二次除以 global scale。
   if (zc.springStiffnessScale !== undefined) {
-    try {
+    try { // Ammo binding 防御性调用：zone 级 setStiffness 覆盖失败忽略
       for (let i = 0; i < 3; i++) {
         if (p.springPosition[i] !== 0) _origSetStiffness.call(cst, i, p.springPosition[i] / zc.springStiffnessScale);
         if (p.springRotation[i] !== 0) _origSetStiffness.call(cst, i + 3, p.springRotation[i] / zc.springStiffnessScale);
@@ -548,9 +549,9 @@ for (const b of physics.bodies) {
   const baseLin = b.params.positionDamping, baseAng = b.params.rotationDamping;
   const lin = zb.linearDampingScale !== undefined ? baseLin * zb.linearDampingScale : baseLin;
   const ang = zb.angularDampingScale !== undefined ? baseAng * zb.angularDampingScale : baseAng;
-  try { b.body.setDamping(Math.min(1, Math.max(0, lin)), Math.min(1, Math.max(0, ang))); } catch (e) {}
+  try { b.body.setDamping(Math.min(1, Math.max(0, lin)), Math.min(1, Math.max(0, ang))); } catch (e) {} // Ammo binding 防御性调用，setDamping 失败忽略
   if (zb.disableDeactivation) {
-    try { b.body.setActivationState(4); } catch (e) {}   // 4 = DISABLE_DEACTIVATION
+    try { b.body.setActivationState(4); } catch (e) {}   // Ammo binding 防御性调用，setActivationState 失败忽略；4 = DISABLE_DEACTIVATION
   }
 }
 
@@ -665,6 +666,7 @@ console.log('physics-driven bones:', physicsBoneNames.size);
 // world rotation 是 IK/Grant 前的旧值 → 旋转轴错位。
 const dt = 1 / physicsParams.frameRate;
 const records = new Map(); // boneName -> [{frame, position, rotation}]
+  // 诊断用分支（保留）：BAKE_DBG=1 时输出约束参数/逐帧角度，生产默认关闭（env 未设 → '' → 跳过）
   const _DBG = process.env.BAKE_DBG || '';
   if (_DBG) {
     for (const c of physics.constraints) {
@@ -733,6 +735,13 @@ for (let frame = 0; frame <= maxFrame; frame++) {
   }
 }
 console.log('recorded physics bones:', records.size);
+
+// ---- FIX-7：恢复 setStiffness 原型 patch ----
+// bake 结束（约束构造/配置均已用毕）后恢复原型，进程内多次 bakePhysics() 时防 patch 累积
+// （幂等但脏：diag-solver4 的「÷50 err 110」即各 run 间未还原原型累积为 ÷50000 的教训）。
+if (springStiffnessScale !== 1) {
+  Ammo.btGeneric6DofSpringConstraint.prototype.setStiffness = _origSetStiffness;
+}
 
 // ---- 7b. frame0Normalize：所有物理骨 rotation 相对 frame0 归零（frame0 强制 = 绑定姿态）----
 // MMD 用「绑定姿态 + VMD 偏移」重建物理骨姿态；若 frame0 非 0°，MMD 会在绑定姿态上

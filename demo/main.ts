@@ -10,10 +10,11 @@ import { MMDAnimationHelper } from '../lib/MMDAnimationHelper.js';
 import { MMDParser } from 'three/examples/jsm/libs/mmdparser.module.js';
 import pako from 'pako';
 
-// 游戏侧 MMDLoader 依赖 globalThis.validExpressions 过滤表情（业务注入）；
-// 独立验证环境注入 null → 跳过过滤，保留全部 morph（与 bake-physics.mjs 空 morph 行为一致）
-(globalThis as any).validExpressions = null;
-(globalThis as any).isUseSimpleMaterial = false;
+// 游戏侧 MMDLoader 注入（validExpressions 表情过滤 / isUseSimpleMaterial 材质开关），
+// 独立仓库无此业务，设 null/false 保持默认行为（null → 跳过过滤保留全部 morph，与 bake-physics 空 morph 一致）
+// 全局类型见 src/types/global.d.ts
+globalThis.validExpressions = null;
+globalThis.isUseSimpleMaterial = false;
 
 // ---- 参数区 ----
 // URL 参数覆盖：?fixed=60&interval=1&solver=10&warmup=0&speed=10
@@ -157,8 +158,8 @@ function loadAnim(idx: number) {
     }
 
     // 重置本动画记录状态
-    (globalThis as any).__viewBakeLog = [];
-    (globalThis as any).__viewBakeFrame = 0;
+    viewBakeLog = [];
+    viewBakeFrame = 0;
     sampleSeq = 0;
     exported = false;
 
@@ -176,6 +177,9 @@ function loadAnim(idx: number) {
 //   同帧多条采样会分散能量导致主段判不出）
 let exported = false;
 let sampleSeq = 0;
+// 记录状态（模块级，非全局）：纯页面内部状态，无外部脚本读取（FIX-4：__viewBakeLog/__viewBakeFrame 收敛）
+let viewBakeLog: any[] = [];
+let viewBakeFrame = 0;
 
 function recordPhysicsFrame() {
   const obj = helper.objects.get(mesh!);
@@ -187,7 +191,7 @@ function recordPhysicsFrame() {
     const bn = b.bone && b.bone.name;
     if (bn) entry.bones[bn] = { q: b.bone.quaternion.toArray() };
   }
-  (globalThis as any).__viewBakeLog.push(entry);
+  viewBakeLog.push(entry);
 }
 
 function stepPhysics(dt: number) {
@@ -205,7 +209,7 @@ function tryExportLog() {
   // 播放结束判定：mixer.time 到达 clip.duration - 0.05（各动画时长不同，不硬编码 2.9）
   if (cur.mixer.time < curClip.duration - 0.05) return;
   exported = true;
-  const log = (globalThis as any).__viewBakeLog || [];
+  const log = viewBakeLog || [];
   const animName = CFG.vmds[curAnimIdx];
   hud.textContent += '\n\n📤 记录完成: ' + log.length + ' 条采样 (' + animName + ')' + (FIXED_FPS ? `（固定${FIXED_FPS}fps × speed${CFG.speed}）` : '（rAF）') + '，导出中…';
   const payload = { entries: log, char: CFG.char, anim: animName, vmdDir: qp0.get('vmdDir') || 'assets', pmx: CFG.pmx };
@@ -230,6 +234,9 @@ function tryExportLog() {
 let fixedTimer: ReturnType<typeof setInterval> | null = null;
 
 function animate() {
+  // ★ FIX-3：animate() 可能被多次调用（btnReset → load() → animate()），
+  //   若旧 timer 未清会叠加多个 stepPhysics 驱动 → 物理步进翻倍。开头一律先清。
+  if (fixedTimer) { clearInterval(fixedTimer); fixedTimer = null; }
   if (FIXED_FPS > 0) {
     const dt = 1 / FIXED_FPS;
     fixedTimer = setInterval(() => {
@@ -262,6 +269,8 @@ const clock = new THREE.Clock();
 };
 (document.getElementById('btnReset') as HTMLButtonElement).onclick = () => {
   if (!mesh) return;
+  // FIX-3 双保险：reset → load() → animate() 前也清理固定步长 timer，防叠加驱动
+  if (fixedTimer) { clearInterval(fixedTimer); fixedTimer = null; }
   // 游戏版 remove 需要 disposeClipAndMixerFunc 回调释放动画资源；验证页直接销毁 mixer + 清空 tracks
   const disposeClipAndMixerFunc = (clip: any, mixer: any) => {
     if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(mesh); }
@@ -283,7 +292,7 @@ window.addEventListener('resize', () => {
 
 // 等 Ammo 就绪：ammo.wasm.js 是 MODULARIZE 工厂，调用后 Ammo.ready 即模块实例
 async function boot() {
-  const AmmoGlobal = (globalThis as any).Ammo;
+  const AmmoGlobal = globalThis.Ammo;
   if (typeof AmmoGlobal === 'undefined') {
     hud.textContent = 'Ammo 加载失败！';
     return;
@@ -299,11 +308,11 @@ async function boot() {
     hud.textContent = 'Ammo 初始化失败: ' + e.message;
     return;
   }
-  if (ammoLib) (globalThis as any).Ammo = ammoLib; // 替换为实例（MMDPhysics 用全局 Ammo）
+  if (ammoLib) globalThis.Ammo = ammoLib; // 替换为实例（MMDPhysics 用全局 Ammo）
   // ★ 烘焙钩子：自定义全量记录（按动画帧，speed 无关）
   //   格式对齐游戏抓取：{ meshName, frame: 动画帧, bones: { 骨名: { q: [...] } } }
-  (globalThis as any).__viewBakeLog = [];
-  (globalThis as any).__viewBakeFrame = 0;
+  viewBakeLog = [];
+  viewBakeFrame = 0;
   load();
   animate();
 }

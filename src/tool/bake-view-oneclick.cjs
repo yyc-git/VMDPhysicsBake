@@ -35,8 +35,10 @@ let pmxRel = '/demo/assets/' + encodeURIComponent(pmxName);
 if (PMX_OVERRIDE) pmxRel = PMX_OVERRIDE; // --pmx 覆盖：直接用指定 PMX
 
 // URL：fixed 固定步长 + speed 加速 + vmds 多动画 + 仓库内 demo/assets 模型
+// 页面为 webpack 版 /demo/index.html（view-bake.html 已迁移）；server 负责把 /bundle.js、
+// /ammo/*、/assets/* 映射到实际产物/资源目录（见 scripts/view-bake-server.cjs）。
 // warmup 默认 60（头发预下落）；warmup=0 时 frame0=绑定姿态（对齐 MMM 金标准 frame0≈identity）
-const PAGE = `http://localhost:${PORT}/demo/view-bake.html?fixed=60&interval=1&solver=10&warmup=${WARMUP}&speed=${SPEED}&char=${encodeURIComponent(CHAR)}&vmds=${encodeURIComponent(VMDS.join(','))}&vmdDir=assets&pmx=${pmxRel}`;
+const PAGE = `http://localhost:${PORT}/demo/index.html?fixed=60&interval=1&solver=10&warmup=${WARMUP}&speed=${SPEED}&char=${encodeURIComponent(CHAR)}&vmds=${encodeURIComponent(VMDS.join(','))}&vmdDir=assets&pmx=${pmxRel}`;
 
 function portAlive() {
   try {

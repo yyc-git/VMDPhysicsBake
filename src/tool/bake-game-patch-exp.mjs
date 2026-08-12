@@ -181,12 +181,6 @@ const clip = loader.animationBuilder.build(vmdRaw, mesh);
 // ---- MMDAnimationHelper（零参数）+ PATCH 注入 ----
 const { MMDAnimationHelper } = await import(pathToFileURL(resolveFrom(PROJECT_ROOT, 'lib/MMDAnimationHelper.js')).href);
 
-// 🔬 判别实验 2：去掉 spring patch（验证零参数 + dt=1/60 是否对齐游戏）
-// const _origSetStiffness = Ammo.btGeneric6DofSpringConstraint.prototype.setStiffness;
-// Ammo.btGeneric6DofSpringConstraint.prototype.setStiffness = function (idx, val) {
-//   return _origSetStiffness.call(this, idx, val / 2000);
-// };
-
 const helper = new MMDAnimationHelper();
 helper.add(mesh, { animation: [['bake', clip]], physics: true });
 // solver 迭代（bake-physics 实锤 50）

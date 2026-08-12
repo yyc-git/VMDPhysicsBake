@@ -41,7 +41,14 @@ http.createServer((req, res) => {
   }
 
   let p = decodeURIComponent(req.url.split('?')[0]);
-  if (p === '/') p = '/demo/view-bake.html';
+  if (p === '/') p = '/demo/index.html';
+  // webpack 产物与静态资源路径映射（demo/index.html 依赖对齐）：
+  //  - /bundle.js     → dist-demo/bundle.js（webpack 产物，仓库根无此文件）
+  //  - /ammo/*        → lib/ammo/*（ammo.wasm.js + ammo.wasm.wasm）
+  //  - /assets/*      → demo/assets/*（VMD 动画，页面按 /assets/<anim>.vmd 拉取）
+  if (p === '/bundle.js') p = '/dist-demo/bundle.js';
+  else if (p.startsWith('/ammo/')) p = '/lib' + p;
+  else if (p.startsWith('/assets/')) p = '/demo' + p;
   const fp0 = path.normalize(path.join(root, p));
   let fp = fp0;
   // fallback: 无扩展名 import → 尝试补 .js / .mjs

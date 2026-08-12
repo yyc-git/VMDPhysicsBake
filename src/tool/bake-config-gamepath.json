@@ -1,4 +1,5 @@
 {
+  "_comment": "该字段为游戏路径配置留档（bake-game 不支持，勿用于 bake-physics）；JSON 不支持注释，用 _comment 字段说明。_unsupported_by_bake_game_keep_for_record 字段名自解释（刻意的留档），保留不删除。",
   "pmx": "../../demo/assets/Tda HMS illustrious Prom Dress Ver1.00 [Silver].pmx",
   "vmdRaw": "../../demo/assets/pickup.vmd",
   "output": "../../output/pickup_bake_gamepath.vmd",
