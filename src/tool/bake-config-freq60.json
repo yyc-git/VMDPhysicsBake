@@ -1,0 +1,41 @@
+{
+  "pmx": "../../demo/assets/Tda HMS illustrious Prom Dress Ver1.00 [Silver].pmx",
+  "vmdRaw": "../../demo/assets/pickup.vmd",
+  "output": "../../output/pickup_bake_eqnone_warmup0_freq60.vmd",
+  "physicsParams": {
+    "unitStep": 0.015384615384615385,
+    "gravity": [0, -98, 0],
+    "maxStepNum": 3,
+    "warmupFrames": 0,
+    "frameRate": 30,
+    "springDamping": 0,
+    "solverIterations": 50,
+    "springStiffnessScale": 1,
+    "physicsUpdateInterval": 3,
+    "equilibriumPoint": "none"
+  },
+  "temporalKinematicInit": {
+    "enabled": true
+  },
+  "kinematicSmoothing": {
+    "enabled": false,
+    "steps": 12,
+    "move": 0.03,
+    "angle": 8,
+    "useDegrees": true
+  },
+  "zoneRules": [
+    {
+      "id": "chest",
+      "match": { "boneNameContains": ["胸"], "rigidNameContains": ["胸"] },
+      "constraint": {},
+      "rigidBody": { "angularDampingScale": 1.0, "disableDeactivation": true }
+    },
+    {
+      "id": "skirt",
+      "match": { "boneNameContains": ["スカート"], "rigidNameContains": ["スカート"] },
+      "constraint": {},
+      "rigidBody": { "linearDampingScale": 1.0, "noCollisionGroups": [1] }
+    }
+  ]
+}

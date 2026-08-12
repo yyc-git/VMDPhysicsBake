@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-demo/
+build/
+output/
+coverage/
+*.log
+.DS_Store
+*.tsbuildinfo
+test-results/
+playwright-report/
+.opencode-brief*.md

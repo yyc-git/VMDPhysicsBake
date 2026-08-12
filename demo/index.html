@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>VMD 物理烘焙可视化</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #222; font-family: monospace; }
+  #container { width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; top: 8px; left: 8px; z-index: 10;
+    background: rgba(0,0,0,0.75); color: #0f0; padding: 8px 12px;
+    font-size: 13px; line-height: 1.6; border-radius: 4px; max-width: 60vw;
+    white-space: pre-wrap; pointer-events: none;
+  }
+  #controls {
+    position: fixed; bottom: 8px; left: 8px; z-index: 10;
+    background: rgba(0,0,0,0.75); color: #eee; padding: 8px 12px;
+    font-size: 13px; border-radius: 4px;
+  }
+  #controls button { margin-right: 6px; cursor: pointer; }
+  #msg { color: #ff8; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<div id="hud">加载中…</div>
+<div id="controls">
+  <button id="btnPlay">播放/暂停</button>
+  <button id="btnReset">重置</button>
+  <label>速度 <input id="speed" type="range" min="0.1" max="3" step="0.1" value="1" style="width:120px"></label>
+  <span id="msg"></span>
+</div>
+
+<!-- Ammo：lib/ammo 经 dev-server 静态映射为 /ammo（ammo.wasm.js + ammo.wasm.wasm 同目录） -->
+<script src="/ammo/ammo.wasm.js"></script>
+<!-- webpack 构建产物（demo/main.ts → bundle.js） -->
+<script src="/bundle.js"></script>
+</body>
+</html>

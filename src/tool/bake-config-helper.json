@@ -1,0 +1,31 @@
+{
+  "pmx": "../../demo/assets/Tda HMS illustrious Prom Dress Ver1.00 [Silver].pmx",
+  "vmdRaw": "../../demo/assets/pickup.vmd",
+  "output": "../../output/pickup_bake_helper.vmd",
+  "helperDriver": true,
+  "physicsParams": {
+    "unitStep": 0.015384615384615385,
+    "gravity": [
+      0,
+      -98,
+      0
+    ],
+    "maxStepNum": 3,
+    "warmupFrames": 60,
+    "frameRate": 30,
+    "springDamping": 0.05,
+    "solverIterations": 50,
+    "springStiffnessScale": 1000
+  },
+  "temporalKinematicInit": {
+    "enabled": true
+  },
+  "kinematicSmoothing": {
+    "enabled": false,
+    "steps": 12,
+    "move": 0.03,
+    "angle": 8,
+    "useDegrees": true
+  },
+  "zoneRules": []
+}

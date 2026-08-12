@@ -1,0 +1,74 @@
+{
+  "name": "vmd-physics-bake",
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "VMD physics baking tool: bake per-frame physics bone VMD from PMX model + action VMD using Ammo.js, with offline verification (V1-V6). 离线 VMD 物理烘焙工具：用 Ammo.js 把 PMX 模型 + 动作 VMD 逐帧烘焙成物理骨 VMD，并附离线验证（V1-V6 断言）。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src/tool",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.19"
+  },
+  "keywords": [
+    "vmd",
+    "pmx",
+    "mmd",
+    "physics",
+    "bake",
+    "ammo",
+    "bullet",
+    "three",
+    "threejs",
+    "animation",
+    "物理烘焙",
+    "骨骼动画"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyc-git/VMDPhysicsBake.git"
+  },
+  "homepage": "https://github.com/yyc-git/VMDPhysicsBake",
+  "bugs": {
+    "url": "https://github.com/yyc-git/VMDPhysicsBake/issues"
+  },
+  "scripts": {
+    "bake": "node src/tool/bake-physics.mjs --config bake-config.json",
+    "verify": "node src/tool/verify-bake.mjs",
+    "test:bdd": "jest --config jest.config.js",
+    "webpack:dev-server": "cross-env NODE_ENV=development webpack-dev-server --config webpack.config.js",
+    "build": "tsc src/index.ts --outDir dist --declaration --module commonjs --target ES2020 --moduleResolution node --esModuleInterop --skipLibCheck --allowSyntheticDefaultImports --resolveJsonModule --lib DOM,ESNext",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "three": "0.159.0",
+    "ammojs-typed": "^1.0.6",
+    "pako": "^1.0.11"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^25.0.0",
+    "@types/three": "0.158.1",
+    "babel-jest": "^29.7.0",
+    "cross-env": "^7.0.3",
+    "html-webpack-plugin": "^5.6.4",
+    "jest": "^29.7.0",
+    "jest-cucumber": "^4.1.0",
+    "playwright": "^1.47.0",
+    "ts-jest": "^29.2.5",
+    "ts-loader": "^9.2.6",
+    "typescript": "^5.8.0",
+    "webpack": "^5.91.0",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.0.4"
+  }
+}

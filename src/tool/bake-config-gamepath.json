@@ -1,0 +1,18 @@
+{
+  "pmx": "../../demo/assets/Tda HMS illustrious Prom Dress Ver1.00 [Silver].pmx",
+  "vmdRaw": "../../demo/assets/pickup.vmd",
+  "output": "../../output/pickup_bake_gamepath.vmd",
+  "physicsParams": {
+    "frameRate": 30,
+    "springDamping": 0
+  },
+  "_unsupported_by_bake_game_keep_for_record": {
+    "equilibriumPoint": "none",
+    "solverIterations": 50,
+    "physicsUpdateInterval": 3,
+    "unitStep": 0.015384615384615385,
+    "maxStepNum": 3,
+    "warmupFrames": 0,
+    "springStiffnessScale": 1
+  }
+}
