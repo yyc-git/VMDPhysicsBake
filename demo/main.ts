@@ -19,6 +19,7 @@ globalThis.isUseSimpleMaterial = false;
 // ---- 参数区 ----
 // URL 参数覆盖：?fixed=60&interval=1&solver=10&warmup=0&speed=10
 //   &pmx=<仓库内相对路径>&char=<别名>&vmds=pickup,idle,walk,run
+//   （默认即最高档 interval=1/solver=10；URL 可覆盖）
 const qp0 = new URLSearchParams(location.search);
 // 动画基目录：dev-server 静态映射 demo/assets → /assets（VMD 默认 assets/pickup.vmd）
 const VMD_BASE = '/assets/';
@@ -29,9 +30,9 @@ const CFG = {
   char: qp0.get('char') || 'hms',
   // 多动画（逗号分隔，默认 pickup；按顺序逐动画烘焙）
   vmds: (qp0.get('vmds') || 'pickup').split(',').map(s => s.trim()).filter(Boolean),
-  // 物理配置（默认 VeryHigh interval=2/solver=6；烘焙高精度可覆盖 interval=1/solver=10）
-  physicsUpdateInterval: parseInt(qp0.get('interval') || '2', 10),
-  solverIterations: parseInt(qp0.get('solver') || '6', 10),
+  // 物理配置（默认最高档 interval=1/solver=10，与 oneclick 一致；URL 可覆盖）
+  physicsUpdateInterval: parseInt(qp0.get('interval') || '1', 10),
+  solverIterations: parseInt(qp0.get('solver') || '10', 10),
   // warmup（默认 60 = 游戏一致；可覆盖 warmup=0 去掉）
   warmup: parseInt(qp0.get('warmup') || '60', 10),
   // 游戏默认物理参数（MMDAnimationHelper add 默认值对齐）
@@ -121,7 +122,9 @@ function loadAnim(idx: number) {
     animDuration = clip.duration;
     hud.textContent += '\nVMD 加载完成: ' + animName + ' ' + clip.tracks.length + ' tracks, duration=' + clip.duration.toFixed(2) + 's' +
       '\n动画帧数(30fps): ' + Math.round(clip.duration * 30) +
-      '\nVeryHigh 物理: interval=' + CFG.physicsUpdateInterval + ' solver=' + CFG.solverIterations +
+      '\n物理: interval=' + CFG.physicsUpdateInterval + ' solver=' + CFG.solverIterations +
+      '\nURL: ?fixed=60&interval=1&solver=10&warmup=60&speed=10 → 最高档物理' +
+      '\n产物: 播放完自动 POST /api/save-bone-log → output/view-bake-bone-log-' + CFG.char + '-<anim>-<ts>.json（采样）；转 VMD: node src/tool/bake-from-view.cjs <json> → output/' + CFG.char + '_<anim>_view.vmd（默认）' +
       '\n初始化物理(warmup=' + CFG.warmup + ')…';
 
     // 上一动画若已挂到 helper，先移除（重建 mixer + physics，保证每动画从干净状态开始）
