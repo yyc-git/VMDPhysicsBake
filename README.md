@@ -160,6 +160,7 @@ VMDPhysicsBake/
 │   └── tool/                       # 核心 CLI 工具（node 直接运行）
 │       ├── bake-physics.mjs        #   主烘焙脚本（Ammo.js / Bullet 模拟 → VMD）
 │       ├── bake-physics-initpose.mjs / bake-physics-freq60.mjs   # 实验档
+│       ├── bake-game.mjs / bake-from-game-value.cjs              #   实验档（旧运行时抓取链路）
 │       ├── verify-bake.mjs         #   V1-V6 验证 + verify-report.json
 │       ├── vmd-writer.mjs          #   VMD 写出（SJIS 编码）
 │       ├── count-physics.mjs       #   物理部件统计
