@@ -144,12 +144,16 @@ URL 参数：
 ### 输出链路
 
 ```
-demo 页面 → 播放完 POST /api/save-bone-log → server 落盘采样 JSON + 自动调 bake-from-view → output/<char>_<anim>_view.vmd（最终产物）
+demo 页面 → 播放完自动导出 → output/<char>_<anim>_view.vmd（最终产物）
 ```
 
-- **页面烘焙**：播放完自动生成最终 VMD，无需手动转。中间 JSON（`output/view-bake-bone-log-*.json`）是内部采样留档（调试用），可忽略
-- **命令行烘焙**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`，与页面烘焙产物逐字节一致（见上方方式对比表）
-- **手动转 VMD**（仅当需要重跑转换）：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
+页面烘焙在播放结束后自动产出最终 VMD；中间采样 JSON（`output/view-bake-bone-log-*.json`）仅调试用，可忽略。命令行烘焙（`yarn bake`）不经浏览器，直接产出 `output/pickup_bake.vmd`。
+
+如需用已有采样 JSON 重跑转换（跳过浏览器烘焙）：
+
+```bash
+node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd
+```
 
 ## 📁 目录结构
 
