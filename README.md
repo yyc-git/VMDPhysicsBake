@@ -207,9 +207,12 @@ npx tsc --noEmit       # 类型检查
 
 Bake **per-frame physics bone VMD** from a **PMX model + action VMD**: the tool simulates the full skeleton physics with Ammo.js (Bullet) and writes each frame's pose of physics bones (skirts, hair, chest, ...) into the VMD. Playback in any MMD player then reproduces the baked physics — no dependency on the viewer's physics engine.
 
+> Background: MMD's real-time physics depends on the viewer's physics engine, so the same model looks different in different players. This tool bakes the physics results into the VMD at baking time — the output is the same physics animation in every MMD player.
+
 ## ✨ Features
 
 - **Offline baking**: PMX + action VMD → per-frame physics bone VMD (Ammo.js / Bullet, reproducible offline)
+- **CLI = page, byte-identical**: the CLI uses the same MMDLoader.load2 pipeline as the demo page (same build, same driver, same sampling) — output is byte-identical between the two modes (V6: 1310324B, avg=0.000000)
 - **Action bones preserved verbatim**: non-physics keyframes (position/rotation/interpolation) unchanged
 - **Morphs copied as-is**: expression frames and weights preserved
 - **Deterministic output**: two runs with the same input produce byte-identical files (V6 assertion)
@@ -220,14 +223,180 @@ Bake **per-frame physics bone VMD** from a **PMX model + action VMD**: the tool 
 
 ## 🚀 Quick Start
 
+### Install
+
 ```bash
 git clone git@github.com:yyc-git/VMDPhysicsBake.git
 cd VMDPhysicsBake
 yarn install
-yarn bake        # → output/pickup_bake.vmd
-yarn verify      # V1-V6 assertions + output/verify-report.json
+```
+
+> Requirements: Node.js 18.19+, yarn (recommended) or npm.
+
+### Bake + Verify
+
+```bash
+yarn bake        # → output/pickup_bake.vmd (bundled HMS model + pickup.vmd demo)
+yarn verify      # V1-V6 assertions + output/verify-report.json (MMM comparison is informational only, does not fail)
 yarn test:bdd    # jest-cucumber BDD
 npx tsc --noEmit # type check
+```
+
+## 🔬 Core CLI
+
+```bash
+# Use a specific config file (bake-config*.json, paths relative to src/tool/)
+node src/tool/bake-physics.mjs --config bake-config.json
+
+# Override inputs/outputs via CLI
+node src/tool/bake-physics.mjs --pmx demo/assets/xxx.pmx --vmd demo/assets/anim.vmd --output output/anim_bake.vmd
+
+# Self-check mode (in-memory only, no file output)
+node src/tool/bake-physics.mjs --self-check
+
+# Count physics parts
+node src/tool/count-physics.mjs "demo/assets/Tda HMS illustrious Prom Dress Ver1.00 [Silver].pmx"
+```
+
+Config file paths are resolved relative to `src/tool/`:
+
+| Field | Description | Default example |
+|-------|-------------|-----------------|
+| `pmx` | PMX model | `../../demo/assets/Tda HMS ... [Silver].pmx` |
+| `vmdRaw` | Raw action VMD | `../../demo/assets/pickup.vmd` |
+| `output` | Baked VMD output | `../../output/pickup_bake.vmd` |
+| `ammoSource` | `npm` (default) \| `game` (wasm build in lib/ammo) | `npm` |
+| `useLoader` | `true` → MMDLoader.load2 pipeline (same build/driver as demo page, byte-identical output); `false`/absent → manual-build simulation | `false` |
+| `helperDriver` | Whether to drive via MMDAnimationHelper | `false` |
+| `physicsParams` | spring / solver / damping / equilibrium params | see bake-config.json |
+| `zoneRules` | per-zone tuning (chest / skirt collision mask etc.) | see bake-config.json |
+
+## 🔬 Core API
+
+Compile entry: `src/index.ts` (`npm run build` → `dist/`, `main`/`types` point to dist).
+
+```ts
+import { bakePhysics, verifyBake, countPhysics } from 'vmd-physics-bake';
+
+// Bake: equivalent to `node src/tool/bake-physics.mjs --config bake-config.json`
+const result = bakePhysics();
+// result.outputPath / result.bytes / result.stdout
+
+// Verify: equivalent to `node src/tool/verify-bake.mjs`, reads output/verify-report.json
+const report = verifyBake();
+// report.allPass / report.assertions / report.compareWithMmm
+
+// Count physics parts of a PMX
+const count = countPhysics('path/to/model.pmx');
+// count.rigidBodies / count.joints / count.rigidBodyType
+```
+
+> Full capabilities (physics param tuning, zone rules, initpose, helperDriver, ...) are exposed via CLI + `bake-config*.json`; the programmatic API forwards to the CLI.
+
+## 🖥️ Demo (visual baking)
+
+The demo is a browser-based visual baking page: load a PMX model + VMD animation, run physics in-page with Ammo.js in real time, record physics bone samples per frame, and auto-convert to the final VMD.
+
+> **Two baking modes** (same PMX+VMD, byte-identical output)
+>
+> | Mode | Command | Notes |
+> |------|---------|-------|
+> | **Page baking** | `node src/tool/bake-view-oneclick.cjs` (or open the page manually) | real-time simulation in browser, visually inspect physics |
+> | **CLI baking** | `yarn bake` (bake-config.json defaults to `useLoader: true`) | pure CLI, same build/driver/sampling via MMDLoader.load2, good for scripting / CI |
+>
+> Both modes produce identical output (V6: bytes identical).
+
+### Mode A: one-click (recommended)
+
+```bash
+node src/tool/bake-view-oneclick.cjs
+# optional: --vmds pickup --speed 10 --warmup 60 --out output --char hms --pmx <repo-relative path>
+```
+
+Pipeline: start static server (8123) → headless Chromium opens the page → plays each animation (**highest physics preset interval=1/solver=10 + warmup=60 + speed=K**) → records physics bones per frame → **server auto-converts to VMD** in the `--out` dir.
+
+### Mode B: manual browser verification
+
+```bash
+node scripts/view-bake-server.cjs   # static server, port 8123 (incl. /api/save-bone-log + auto VMD conversion)
+```
+
+Open in browser (**highest physics preset by default**; URL params can override):
+
+```
+http://localhost:8123/demo/index.html
+```
+
+URL params:
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `fixed` | 0 (rAF) | fixed step fps (e.g. 60); 0 = follow browser rAF |
+| `interval` | 1 | physics update interval (1 = every render frame, highest) |
+| `solver` | 10 | solver iterations (highest) |
+| `warmup` | 60 | physics warmup frames (hair pre-fall; 0 = frame0 bind pose) |
+| `speed` | 1 | speed multiplier (wall-clock K× faster under fixed mode, physics result bit-identical) |
+| `vmds` | pickup | comma-separated animations, baked sequentially |
+| `useLoader` | true | `true` → CLI baking uses MMDLoader.load2 pipeline (same as page) |
+| `char` | hms | character tag for output filename |
+| `pmx` | HMS | model path (relative to demo/assets) |
+
+The page HUD shows the current physics preset and output info. **Auto-exports when playback finishes**:
+
+```
+✅ Exported VMD: output/hms_pickup_view.vmd (N samples)
+```
+
+### Output pipeline
+
+```
+demo page → auto-export on finish → output/<char>_<anim>_view.vmd (final output)
+```
+
+Page baking produces the final VMD automatically after playback; the intermediate sample JSON (`output/view-bake-bone-log-*.json`) is for debugging only. CLI baking (`yarn bake`) skips the browser and produces `output/pickup_bake.vmd` directly.
+
+To re-convert from an existing sample JSON (skip browser baking):
+
+```bash
+node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd
+```
+
+## 📁 Directory Structure
+
+```
+VMDPhysicsBake/
+├── src/
+│   ├── index.ts                    # library entry (bakePhysics / verifyBake / countPhysics)
+│   └── tool/                       # core CLI tools (run directly with node)
+│       ├── bake-physics.mjs        #   main baking script (Ammo.js / Bullet simulation → VMD)
+│       ├── bake-physics-initpose.mjs / bake-physics-freq60.mjs   # experimental presets
+│       ├── bake-game.mjs / bake-from-game-value.cjs              # experimental (legacy runtime capture)
+│       ├── verify-bake.mjs         #   V1-V6 verification + verify-report.json
+│       ├── vmd-writer.mjs          #   VMD writer (SJIS encoding)
+│       ├── count-physics.mjs       #   physics part statistics
+│       ├── bake-from-view.cjs      #   visual capture JSON → VMD (energy-based main segment + decimation + frame fill)
+│       ├── bake-view-oneclick.cjs  #   one-click visual baking (Playwright)
+│       └── bake-config*.json       #   physics parameter presets
+├── lib/                            # three MMD extensions (MMDLoader / MMDPhysics / MMDAnimationHelper) + ammo.wasm.js
+├── demo/
+│   ├── assets/                     # demo assets: HMS PMX + pickup.vmd + textures (data/ + sph/)
+│   └── index.html                  # visual baking page (webpack entry demo/main.ts)
+├── scripts/
+│   ├── view-bake-server.cjs        # visual baking static server (/api/save-bone-log persistence)
+│   └── view-bake-pako-wrapper.mjs
+├── test/
+│   ├── features/bake-physics.feature       # BDD contract
+│   ├── step-definitions/bake-physics.steps.ts
+│   └── helpers/                            # bake-check / bake-assembly-check
+├── docs/                           # research docs (archive)
+└── package.json
+```
+
+## ✅ Testing
+
+```bash
+yarn test:bdd          # BDD (jest-cucumber): 163 physics bones / 78 morphs / 91 frames / solver 50 etc.
+npx tsc --noEmit       # type check
 ```
 
 ## 📄 License
