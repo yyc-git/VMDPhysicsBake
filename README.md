@@ -61,7 +61,7 @@ node src/tool/count-physics.mjs "demo/assets/Tda HMS illustrious Prom Dress Ver1
 | `output` | 烘焙产物 VMD | `../../output/pickup_bake.vmd` |
 | `ammoSource` | `npm`（默认）\| `game`（仓库内 lib/ammo 的 wasm 版） | `npm` |
 | `useLoader` | `true` 时走 **MMDLoader.load2 链路**（与 demo 页面完全同构建同驱动，产物逐字节一致）；`false`/缺省走手动构建模拟 | `false` |
-| `helperDriver` | 是否用 MMDAnimationHelper 完整驱动（复刻游戏链路） | `false` |
+| `helperDriver` | 是否用 MMDAnimationHelper 完整驱动 | `false` |
 | `physicsParams` | spring/solver/阻尼/平衡点等物理参数 | 见 bake-config.json |
 | `zoneRules` | 分区调参（胸部 / 裙子碰撞 mask 等） | 见 bake-config.json |
 
@@ -89,17 +89,16 @@ const count = countPhysics('path/to/model.pmx');
 
 ## 🖥️ 运行 Demo（可视化烘焙）
 
-Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用页面内 Ammo.js 实时跑物理（**与游戏运行时同款物理驱动**），逐帧记录物理骨采样，自动转成最终 VMD。
+Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用页面内 Ammo.js 实时跑物理，逐帧记录物理骨采样，自动转成最终 VMD。
 
-> ⚠️ **两条链路怎么选（重要）**
+> **两种烘焙方式**（同一 PMX+VMD，产物逐字节一致）
 >
-> | 链路 | 命令 | 物理效果 | 适用场景 |
-> |------|------|---------|---------|
-> | **页面链路（推荐）** | `node src/tool/bake-view-oneclick.cjs`（或手动浏览器） | ⭐ **与游戏/原版一致**（MMDAnimationHelper 完整驱动 + 最高档物理） | 正式烘焙、追求效果 |
-> | **命令行（useLoader）** | `yarn bake`（bake-config.json 默认 `useLoader: true`） | ⭐ **与页面链路逐字节一致**（MMDLoader.load2 同构建 + 同驱动 + 同抽帧，V6 实测 bytes identical） | 正式烘焙 / 自动化验证 |
-> | 命令行模拟（旧） | `yarn bake`（无 useLoader） | 一般（离线数值模拟，与浏览器物理有偏差） | 快速冒烟 / 历史兼容 |
+> | 方式 | 命令 | 特点 |
+> |------|------|------|
+> | **页面烘焙** | `node src/tool/bake-view-oneclick.cjs`（或手动浏览器） | 浏览器内实时模拟，可视化观察物理效果 |
+> | **命令行烘焙** | `yarn bake`（bake-config.json 默认 `useLoader: true`） | 纯命令行，MMDLoader.load2 同构建同驱动同抽帧，适合脚本化 / CI |
 >
-> `useLoader: true` 后命令行烘焙与 demo 页面链路产物**完全一致**（同一 PMX+VMD，物理骨逐字节相同）。
+> 两种方式产物完全一致（V6 实测 bytes identical）。
 
 ### 方式 A：一键全自动（推荐）
 
@@ -148,8 +147,8 @@ URL 参数：
 demo 页面 → 播放完 POST /api/save-bone-log → server 落盘采样 JSON + 自动调 bake-from-view → output/<char>_<anim>_view.vmd（最终产物）
 ```
 
-- **页面链路（推荐）**：播放完自动生成最终 VMD，无需手动转。中间 JSON（`output/view-bake-bone-log-*.json`）是内部采样留档（调试用），可忽略
-- **纯命令行模拟**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`；**`useLoader: true` 时与页面链路逐字节一致**（推荐，见上方链路表）
+- **页面烘焙**：播放完自动生成最终 VMD，无需手动转。中间 JSON（`output/view-bake-bone-log-*.json`）是内部采样留档（调试用），可忽略
+- **命令行烘焙**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`，与页面烘焙产物逐字节一致（见上方方式对比表）
 - **手动转 VMD**（仅当需要重跑转换）：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
 
 ## 📁 目录结构
@@ -158,15 +157,13 @@ demo 页面 → 播放完 POST /api/save-bone-log → server 落盘采样 JSON +
 VMDPhysicsBake/
 ├── src/
 │   ├── index.ts                    # 库入口（bakePhysics / verifyBake / countPhysics）
-│   └── tool/                       # 核心 CLI 工具（node 直接运行，零游戏依赖）
+│   └── tool/                       # 核心 CLI 工具（node 直接运行）
 │       ├── bake-physics.mjs        #   主烘焙脚本（Ammo.js / Bullet 模拟 → VMD）
 │       ├── bake-physics-initpose.mjs / bake-physics-freq60.mjs   # 实验档
-│       ├── bake-game.mjs           #   复刻游戏运行时链路的烘焙
 │       ├── verify-bake.mjs         #   V1-V6 验证 + verify-report.json
 │       ├── vmd-writer.mjs          #   VMD 写出（SJIS 编码）
 │       ├── count-physics.mjs       #   物理部件统计
 │       ├── bake-from-view.cjs      #   可视化抓取 JSON → VMD（能量法主段 + 抽稀 + 补帧）
-│       ├── bake-from-game-*.cjs    #   游戏内抓取数据 → VMD
 │       ├── bake-view-oneclick.cjs  #   一键可视化烘焙（Playwright）
 │       └── bake-config*.json       #   物理参数档
 ├── lib/                            # three MMD 扩展（MMDLoader / MMDPhysics / MMDAnimationHelper）+ ammo.wasm.js
