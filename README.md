@@ -86,11 +86,53 @@ const count = countPhysics('path/to/model.pmx');
 
 > 完整能力（物理参数微调、zone rules、initpose、helperDriver 等）以 CLI + `bake-config*.json` 为主接口；编程接口为 CLI 转发。
 
-## 🖥️ 运行 Demo（Session 2 建设中）
+## 🖥️ 运行 Demo（可视化烘焙）
+
+Demo 是浏览器里的可视化烘焙页：加载 PMX 模型 + VMD 动画，用页面内 Ammo.js 实时跑物理，逐帧记录物理骨采样，POST 给静态 server 落盘为 JSON，再经工具转成 VMD。
+
+### 方式 A：一键全自动（推荐）
 
 ```bash
-yarn webpack:dev-server   # 可视化烘焙验证页（demo/）
+node src/tool/bake-view-oneclick.cjs
+# 可选参数：--vmds pickup --speed 10 --warmup 60 --out output --char hms --pmx <仓库内相对路径>
 ```
+
+链路：启动静态 server（8123）→ headless Chromium 打开页面 → 逐动画播放（**最高档物理 interval=1/solver=10 + warmup=60 + speed=K 加速**）→ 每帧记录物理骨 → 自动导出 JSON → bake-from-view 逐动画生成 VMD 到 `--out` 目录。
+
+### 方式 B：手动浏览器验证
+
+```bash
+node scripts/view-bake-server.cjs   # 静态 server，端口 8123（含 /api/save-bone-log 落盘）
+```
+
+浏览器打开（**默认 VeryHigh 物理 interval=2/solver=6；烘焙高精度加 URL 参数**）：
+
+```
+http://localhost:8123/demo/index.html?fixed=60&interval=1&solver=10&warmup=60&speed=10
+```
+
+URL 参数：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `fixed` | 0（rAF） | 固定步长 fps（如 60）；0 = 跟随浏览器 rAF |
+| `interval` | 2 | 物理更新间隔（1 = 最高档每渲染帧更新） |
+| `solver` | 6 | solver 迭代次数（10 = 最高档） |
+| `warmup` | 60 | 物理预热帧数（头发预下落；0 = frame0 绑定姿态） |
+| `speed` | 1 | 加速倍数（fixed 模式下墙钟快 K 倍，物理结果逐位一致） |
+| `vmds` | pickup | 多动画逗号分隔，按顺序逐动画烘焙 |
+| `char` | hms | 导出文件名人物标签 |
+| `pmx` | HMS | 模型路径（demo/assets 相对路径） |
+
+### 输出链路
+
+```
+demo 页面 → POST /api/save-bone-log → output/view-bake-bone-log-<char>-<anim>-<时间戳>.json（骨骼采样）
+→ node src/tool/bake-from-view.cjs <capture.json> [out.vmd] → 最终 VMD
+```
+
+- **纯命令行烘焙**（不经浏览器）：`yarn bake` → `output/pickup_bake.vmd`
+- **可视化采样转 VMD**：`node src/tool/bake-from-view.cjs output/view-bake-bone-log-*.json output/anim_bake.vmd`
 
 ## 📁 目录结构
 
@@ -105,13 +147,14 @@ VMDPhysicsBake/
 │       ├── verify-bake.mjs         #   V1-V6 验证 + verify-report.json
 │       ├── vmd-writer.mjs          #   VMD 写出（SJIS 编码）
 │       ├── count-physics.mjs       #   物理部件统计
-│       ├── bake-from-view.cjs / bake-from-game-*.cjs   # 抓取数据 → VMD
+│       ├── bake-from-view.cjs      #   可视化抓取 JSON → VMD（能量法主段 + 抽稀 + 补帧）
+│       ├── bake-from-game-*.cjs    #   游戏内抓取数据 → VMD
 │       ├── bake-view-oneclick.cjs  #   一键可视化烘焙（Playwright）
 │       └── bake-config*.json       #   物理参数档
 ├── lib/                            # three MMD 扩展（MMDLoader / MMDPhysics / MMDAnimationHelper）+ ammo.wasm.js
 ├── demo/
-│   ├── assets/                     # 示例资产：HMS PMX + pickup.vmd
-│   └── view-bake.orig.html         # 可视化页蓝本（Session 2 改造）
+│   ├── assets/                     # 示例资产：HMS PMX + pickup.vmd + 贴图（data/ + sph/）
+│   └── index.html                  # 可视化烘焙页（webpack 入口 demo/main.ts）
 ├── scripts/
 │   ├── view-bake-server.cjs        # 可视化烘焙静态 server（/api/save-bone-log 落盘）
 │   └── view-bake-pako-wrapper.mjs

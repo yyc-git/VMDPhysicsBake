@@ -10,3 +10,5 @@ coverage/
 test-results/
 playwright-report/
 .opencode-brief*.md
+
+mine/
