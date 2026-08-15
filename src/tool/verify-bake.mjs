@@ -158,7 +158,8 @@ function main() {
       };
       if (ok) pass('V1_physicsBoneCoverage', detail); else fail('V1_physicsBoneCoverage', detail);
     } else {
-      const expectedFrames = maxFrame + 1;
+      // 物理骨每骨帧数 = maxFrame（不是 maxFrame+1）：bake-from-view 的 SKIP_HEAD=2 删掉 1 帧（补帧 0 前）是预期行为
+      const expectedFrames = maxFrame;
       const missing = physTolerantNames.filter(n => !outNameSet.has(n));
       const wrongFrameCount = physTolerantNames.filter(n => (outByBone.get(n) || []).length !== expectedFrames);
       const ok = missing.length === 0 && wrongFrameCount.length === 0 && physTolerantNames.length === physOriginalNames.length;
@@ -180,7 +181,7 @@ function main() {
       // 断言 = 帧范围合法 + 总帧数大于动作骨数（物理骨至少各 1 帧）
       const expectedTotal = useLoaderMode
         ? (actionMotions.length + 1) // 下限：动作骨 + 至少 1 条物理骨帧
-        : actionMotions.length + physTolerantNames.length * (maxFrame + 1);
+        : actionMotions.length + physTolerantNames.length * maxFrame;
       const totalOk = useLoaderMode
         ? (vmdOut.motions.length > actionMotions.length)
         : vmdOut.motions.length === expectedTotal;
@@ -190,7 +191,7 @@ function main() {
         totalMotions: vmdOut.motions.length,
         expectedTotal,
         actionMotionsKept: actionMotions.length,
-        physicsFrames: useLoaderMode ? '抽帧(见V1注)' : physTolerantNames.length * (maxFrame + 1),
+        physicsFrames: useLoaderMode ? '抽帧(见V1注)' : physTolerantNames.length * maxFrame,
         outOfRangeCount: outOfRange.length
       };
       if (ok) pass('V2_frameRangeAndCount', detail); else fail('V2_frameRangeAndCount', detail);

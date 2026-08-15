@@ -97,6 +97,7 @@ globalThis.Ammo = AmmoModule;
 const { MMDParser } = await import('three/examples/jsm/libs/mmdparser.module.js');
 const parser = new MMDParser.Parser();
 const { writeVmd, sanitizeSjis } = await import(pathToFileURL(resolveFrom(SCRIPT_DIR, './vmd-writer.mjs')).href);
+const { resamplePhysicsFrames } = await import(pathToFileURL(resolveFrom(SCRIPT_DIR, './resample-physics.mjs')).href);
 
 const readBuf = (p) => {
   const buf = fs.readFileSync(p);
@@ -803,7 +804,7 @@ console.log('physics-driven bones:', physicsBoneNames.size);
 // 之前：physics 在 IK/Grant 后立即执行，但 mesh.updateMatrixWorld 只在前面调用一次，
 // IK/Grant 修改骨骼后 worldMatrix 变 stale → physics._getBoneTransform 读到的
 // world rotation 是 IK/Grant 前的旧值 → 旋转轴错位。
-// v28b：物理步进频率对齐页面 fixed=60（60Hz 步进，每 2 步采样 1 条 → 30Hz 输出 90 帧）
+// v28b：物理步进频率对齐页面 fixed=60（60Hz 步进，每 2 步采样 1 条 → 30Hz 输出，帧数 = 源 maxFrame）
 const PHYS_SUBSTEP = 2; // 每输出帧的物理子步数（60Hz/30Hz）
 const dt = 1 / (physicsParams.frameRate * PHYS_SUBSTEP);
 const records = new Map(); // boneName -> [{frame, position, rotation}]
@@ -838,7 +839,7 @@ const _dbgRead = (b) => {
 // ★ 预热后 mixer.time=0，骨骼在 t=0 动画姿态。
 //   frame0 无需 mixer.update（已在 warmup 应用 t=0 姿态），只做 IK/Grant/Physics/记录。
 //   之后每轮先 mixer.update(dt) 推进 → IK/Grant → mesh.updateMatrixWorld → Physics → 记录。
-for (let frame = 0; frame <= maxFrame - 1; frame++) { // v30b：驱动 89 帧 × 2 子步 = 178 物理步（对齐页面播放至 clip.duration-0.05 的 178 条采样）
+for (let frame = 0; frame <= maxFrame - 1; frame++) { // v30b：驱动 maxFrame 帧 × 2 子步 = maxFrame×2 物理步（对齐页面 60Hz 采样，每个子步都记录）
   // v28b：每输出帧内部跑 PHYS_SUBSTEP 个物理子步（对齐页面 60Hz），只记录最后一个子步后的状态
   for (let sub = 0; sub < PHYS_SUBSTEP; sub++) {
   if (helperDriver) {
@@ -932,31 +933,12 @@ for (const name of sortedPhysNames) {
   const recs = records.get(name);
   if (!recs) continue;
   const outName = outPhysNameOf.get(name);
-  // v30：复刻 bake-from-view 抽帧 —— 采样 i → animF=round(i*90/(N-1))，SKIP_HEAD=2 删 animF≤1，补帧 0 用第一条
-  const N = recs.length; // 物理步数（如 178）
-  if (N < 2) continue;
-  const frameMap = new Map();
-  for (let i = 0; i < N; i++) {
-    const animF = Math.round((i * 90) / (N - 1));
-    frameMap.set(animF, recs[i].rotation); // 同 animF 后写覆盖（与 bake-from-view Map.set 一致）
-  }
-  const cutF = Math.round(((2 - 1) * 90) / (N - 1)); // SKIP_HEAD=2
-  for (const k of [...frameMap.keys()]) if (k <= cutF) frameMap.delete(k);
-  const frames = [...frameMap.keys()].sort((a, b) => a - b);
-  if (frames[0] !== 0) {
-    const firstQ = frameMap.get(frames[0]);
-    if (firstQ) {
-      outMotions.push({ boneName: outName, frameNum: 0, position: [0, 0, 0], rotation: [...firstQ], interpolation: new Array(64).fill(0) });
-    }
-  }
-  if (frames[frames.length - 1] !== 90) {
-    const lastQ = frameMap.get(frames[frames.length - 1]);
-    if (lastQ) {
-      outMotions.push({ boneName: outName, frameNum: 90, position: [0, 0, 0], rotation: [...lastQ], interpolation: new Array(64).fill(0) });
-    }
-  }
-  for (const k of frames) {
-    outMotions.push({ boneName: outName, frameNum: k, position: [0, 0, 0], rotation: [...frameMap.get(k)], interpolation: new Array(64).fill(0) });
+  // v31：抽帧映射按源 maxFrame（非硬编码 90），修复短动画被拉长 / 长动画被截断。
+  // resamplePhysicsFrames 为纯函数（src/tool/resample-physics.mjs），保留原 bake-from-view
+  // 语义（SKIP_HEAD=2 / 补帧 0 / 补尾帧）。pickup(maxFrame=90) 行为不变。
+  const sampled = resamplePhysicsFrames(recs, maxFrame);
+  for (const s of sampled) {
+    outMotions.push({ boneName: outName, frameNum: s.frameNum, position: [0, 0, 0], rotation: s.rotation, interpolation: new Array(64).fill(0) });
   }
 }
 
@@ -997,7 +979,8 @@ function selfCheck(outBytes) {
   const outNames = [...new Set(outPhysNameOf.values())];
   const physNamesPresent = outNames.filter((n) => byName.has(n));
   const assertPhysCount = physNamesPresent.length >= sortedPhysNames.length;
-  const frameOk = physNamesPresent.every((n) => byName.get(n).length === maxFrame + 1);
+  // 物理骨帧数 = maxFrame（不是 maxFrame+1）：bake-from-view 的 SKIP_HEAD=2 删掉 1 帧（补帧 0 前）是预期行为
+  const frameOk = physNamesPresent.every((n) => byName.get(n).length === maxFrame);
   const frameRangeOk = physNamesPresent.every((n) => {
     const fs_ = byName.get(n).map((m) => m.frameNum);
     return Math.min(...fs_) === 0 && Math.max(...fs_) === maxFrame;
@@ -1032,7 +1015,7 @@ function selfCheck(outBytes) {
   }
   console.log('--- self-check ---');
   console.log(`physics bones present: ${physNamesPresent.length}/${sortedPhysNames.length} (${assertPhysCount ? 'OK' : 'FAIL'})`);
-  console.log(`each physics bone frames: ${frameOk ? `OK (${maxFrame + 1})` : 'FAIL'}`);
+  console.log(`each physics bone frames: ${frameOk ? `OK (${maxFrame})` : 'FAIL'}`);
   console.log(`frame range 0..${maxFrame}: ${frameRangeOk ? 'OK' : 'FAIL'}`);
   console.log(`morph count: ${back.morphs.length} (${morphCountOk ? 'OK' : 'FAIL'})`);
   console.log(`action bone preserved (non-physics): ${actionBoneTotal} frames ${actionBoneOk ? 'OK' : 'FAIL'}`);
