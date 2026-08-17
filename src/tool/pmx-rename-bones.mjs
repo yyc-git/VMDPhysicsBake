@@ -191,7 +191,7 @@ for (let i = 0; i < 4; i++) pos = readText(buf, pos, enc).next;
 // 顶点 section
 const vCount = buf.readUInt32LE(pos); pos += 4;
 for (let i = 0; i < vCount; i++) {
-  pos += 12 + 12 + 8 + additionalUvNum * 8; // position/normal/uv/auvs
+  pos += 12 + 12 + 8 + additionalUvNum * 16; // position/normal/uv/auvs（每个附加 UV = float4 = 16 字节）
   const type = buf.readUInt8(pos); pos += 1;
   if (type === 0) pos += boneIdxSize * 1; // BDEF1
   else if (type === 1) pos += boneIdxSize * 2 + 4; // BDEF2
