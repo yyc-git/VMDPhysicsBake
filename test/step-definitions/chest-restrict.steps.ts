@@ -25,6 +25,19 @@ describe('chestPhysicsRestrict 纯函数', () => {
         expect(facts.customWalk).toBe(true);
     });
 
+    test('v2：skillName 命中 sit/crawl 动作名时启用（文件名不含 sit/crawl 亦可）', () => {
+        expect(facts.skillHit).toBe(true);
+        expect(facts.skillMiss).toBe(false);
+        expect(facts.skillDisabled).toBe(false);
+    });
+
+    test('v2：chestRestrictSource 返回判定来源 vmd/skill/vmd+skill/null', () => {
+        expect(facts.sourceVmd).toBe('vmd');
+        expect(facts.sourceSkill).toBe('skill');
+        expect(facts.sourceBoth).toBe('vmd+skill');
+        expect(facts.sourceNone).toBe(null);
+    });
+
     test('excludeChestBones 剔除胸/乳/breast 骨、其余保留并返回被排除列表', () => {
         expect(facts.excluded).toEqual(['breast_L', '左胸', '乳摇', '右胸'].sort());
         expect(facts.remaining).toEqual(['右手首', '头'].sort());
