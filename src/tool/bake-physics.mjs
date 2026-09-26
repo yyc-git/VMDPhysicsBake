@@ -8,6 +8,7 @@ import { Skeleton, SkinnedMesh, Bone, BufferGeometry } from 'three';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { isChestRestrictActive, excludeChestBones } from './chest-restrict.mjs';
 
 // ---- Node ESM hook：lib/ 内 webpack 风格 import + pako 命名导出（见 resolve-ext.mjs / pako-esm-hook.mjs）----
 await import('./register-hooks.mjs');
@@ -27,6 +28,7 @@ function parseCli(argv) {
     else if (a === '--vmd') args.vmd = argv[++i];
     else if (a === '--output') args.output = argv[++i];
     else if (a === '--self-check') args.selfCheck = true;
+    else if (a === '--chest-physics-restrict') args.chestPhysicsRestrict = true;
   }
   return args;
 }
@@ -37,6 +39,16 @@ const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const PMX_PATH = cli.pmx ? resolveFrom(SCRIPT_DIR, cli.pmx) : resolveFrom(SCRIPT_DIR, config.pmx);
 const VMD_RAW_PATH = cli.vmd ? resolveFrom(SCRIPT_DIR, cli.vmd) : resolveFrom(SCRIPT_DIR, config.vmdRaw);
 const VMD_OUT_PATH = cli.output ? resolveFrom(SCRIPT_DIR, cli.output) : resolveFrom(SCRIPT_DIR, config.output);
+
+// ---- 胸部物理限制（chestPhysicsRestrict，默认 false）----
+// true 且 VMD 文件名（basename 不含扩展名）命中 chestRestrictVmdPattern（默认 /sit|crawl/i）时，
+// 从物理骨集合中剔除骨名命中 chestBonePattern（默认 /胸|乳|breast/i）的胸骨 → 不烘焙胸骨物理。
+// 「不烘焙」= 不写烘焙胸骨通道；源 VMD 若自带胸骨 key 则原样保留（§8a 不再丢弃），否则该骨无通道（保持绑定姿态）。
+const chestPhysicsRestrict = cli.chestPhysicsRestrict === true || config.chestPhysicsRestrict === true;
+const chestRestrictVmdPattern = config.chestRestrictVmdPattern || 'sit|crawl';
+const chestBonePattern = config.chestBonePattern || '胸|乳|breast';
+const vmdBaseName = path.basename(VMD_RAW_PATH, path.extname(VMD_RAW_PATH));
+const chestRestrictActive = isChestRestrictActive({ enabled: chestPhysicsRestrict, vmdName: vmdBaseName, vmdPattern: chestRestrictVmdPattern });
 
 // ★ helper 驱动模式（方向15）：bake 改用游戏侧 MMDAnimationHelper 完整驱动
 // 游戏实时 = MMDAnimationHelper.update(delta) → _animateMesh 完整调用链（mixer.update→IK→grant→physics.update→骨骼矩阵写回）。
@@ -791,6 +803,10 @@ for (const rb of pmx.rigidBodies) {
 }
 const physBoneIndices = [...physicsBoneIndices].filter((i) => i !== -1);
 const physicsBoneNames = new Set(physBoneIndices.map((i) => bones[i].name));
+if (chestRestrictActive) {
+  const excludedChestBones = excludeChestBones(physicsBoneNames, chestBonePattern);
+  console.log(`[chest-restrict] vmd="${vmdBaseName}" 命中 /${chestRestrictVmdPattern}/i → 排除胸骨: ${excludedChestBones.join(', ') || '(无匹配)'}`);
+}
 console.log('physics-driven bones:', physicsBoneNames.size);
 
 // ---- 7. 逐帧模拟 + 记录物理骨（frame 0..maxFrame）----

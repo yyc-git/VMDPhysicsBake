@@ -1,0 +1,32 @@
+// 胸部物理限制（chestPhysicsRestrict）纯函数单测。
+// 与 bake-physics.steps.ts 一致：通过子进程 helper 运行真实模块，避免 ts->mjs 直连的 babel 互操作问题。
+import { execSync } from 'child_process';
+import * as path from 'path';
+
+describe('chestPhysicsRestrict 纯函数', () => {
+    let facts: any;
+
+    beforeAll(() => {
+        const helper = path.resolve(__dirname, '..', 'helpers', 'chest-restrict-check.mjs');
+        facts = JSON.parse(execSync(`node "${helper}"`, { encoding: 'utf-8' }).trim());
+    });
+
+    test('默认（enabled=false）不启用', () => {
+        expect(facts.disabledCrawl).toBe(false);
+    });
+
+    test('enabled=true 且 vmd 名命中 sit/crawl（大小写不敏感）时启用', () => {
+        expect(facts.enabledCrawl).toBe(true);
+        expect(facts.enabledKeepSit).toBe(true);
+        expect(facts.enabledWalk).toBe(false);
+    });
+
+    test('自定义 vmdPattern 可覆盖默认', () => {
+        expect(facts.customWalk).toBe(true);
+    });
+
+    test('excludeChestBones 剔除胸/乳/breast 骨、其余保留并返回被排除列表', () => {
+        expect(facts.excluded).toEqual(['breast_L', '左胸', '乳摇', '右胸'].sort());
+        expect(facts.remaining).toEqual(['右手首', '头'].sort());
+    });
+});
