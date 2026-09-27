@@ -43,12 +43,12 @@ const VMD_OUT_PATH = cli.output ? resolveFrom(SCRIPT_DIR, cli.output) : resolveF
 
 // ---- 胸部物理限制（chestPhysicsRestrict，默认 false）----
 // true 且（VMD 文件名 basename 不含扩展名 或 --chest-skill 传入的技能动作名）命中
-// chestRestrictVmdPattern（默认 /sit|crawl/i）时，从物理骨集合中剔除骨名命中
+// chestRestrictVmdPattern（默认 /sit|crawl|pick/i）时，从物理骨集合中剔除骨名命中
 // chestBonePattern（默认 /胸|乳|breast/i）的胸骨 → 不烘焙胸骨物理。
 // v2 补判定：文件名丢 Sit/Crawl 的 vmd（如 tighten_leg ↔ Skill_Giantess_Sit_TightenLeg）由 step-5 经 --chest-skill 补上。
 // 「不烘焙」= 不写烘焙胸骨通道；源 VMD 若自带胸骨 key 则原样保留（§8a 不再丢弃），否则该骨无通道（保持绑定姿态）。
 const chestPhysicsRestrict = cli.chestPhysicsRestrict === true || config.chestPhysicsRestrict === true;
-const chestRestrictVmdPattern = config.chestRestrictVmdPattern || 'sit|crawl';
+const chestRestrictVmdPattern = config.chestRestrictVmdPattern || 'sit|crawl|pick';
 const chestBonePattern = config.chestBonePattern || '胸|乳|breast';
 const vmdBaseName = path.basename(VMD_RAW_PATH, path.extname(VMD_RAW_PATH));
 const chestSkillName = cli.chestSkill || '';

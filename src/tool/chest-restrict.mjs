@@ -1,13 +1,14 @@
 // chest-restrict.mjs — 胸部物理限制纯函数（判定来源 + 排除集合），供 bake-physics.mjs 与单测复用。
-// 「胸部物理限制」(chestPhysicsRestrict)：启用且（VMD 文件名 或 Sit/Crawl 技能动作名）命中 pattern 时，
+// 「胸部物理限制」(chestPhysicsRestrict)：启用且（VMD 文件名 或 Sit/Crawl/Pick 技能动作名）命中 pattern 时，
 // 从物理骨集合中剔除胸骨（骨名命中 胸/乳/breast），使这些骨不烘焙物理。
 
 /**
  * 判定来源：命中返回 'vmd' / 'skill' / 'vmd+skill'，未命中返回 null（enabled=false 直接 null）。
  * skillName 为 v2 补判定（动作名，如 Skill_Giantess_Sit_TightenLeg），缺省 = 仅按文件名。
- * vmdName / skillName 用同一个 vmdPattern（默认 /sit|crawl/i，可被 config 覆盖）。
+ * vmdName / skillName 用同一个 vmdPattern（默认 /sit|crawl|pick/i，可被 config 覆盖）。
+ * 2026-09-27 兄弟拍板：Pick 相关动画（pickup/pickdown/keep_pick/pick_to_ub/ub_to_pick…）也移除胸骨物理烘焙。
  */
-export function chestRestrictSource({ enabled, vmdName = '', skillName = '', vmdPattern = 'sit|crawl' }) {
+export function chestRestrictSource({ enabled, vmdName = '', skillName = '', vmdPattern = 'sit|crawl|pick' }) {
   if (!enabled) return null;
   const re = new RegExp(vmdPattern, 'i');
   const byVmd = vmdName ? re.test(vmdName) : false;

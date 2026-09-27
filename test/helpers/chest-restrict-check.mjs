@@ -11,6 +11,16 @@ const facts = {
     enabledKeepSit: isChestRestrictActive({ enabled: true, vmdName: 'Keep_Sit' }),
     enabledWalk: isChestRestrictActive({ enabled: true, vmdName: 'walk' }),
     customWalk: isChestRestrictActive({ enabled: true, vmdName: 'walk', vmdPattern: 'walk' }),
+    // pick 扩展（2026-09-27）：Pick 相关动画同样移除胸骨物理烘焙
+    enabledPickup: isChestRestrictActive({ enabled: true, vmdName: 'pickup' }),
+    enabledPickdown: isChestRestrictActive({ enabled: true, vmdName: 'pickdown_fromIdle' }),
+    enabledKeepPick: isChestRestrictActive({ enabled: true, vmdName: 'keep_pick' }),
+    enabledPickDisabled: isChestRestrictActive({ enabled: false, vmdName: 'pickup' }),
+    enabledStandNotPick: isChestRestrictActive({ enabled: true, vmdName: 'stand' }),
+    pickSkillHit: isChestRestrictActive({ enabled: true, vmdName: 'shoe', skillName: 'Skill_Giantess_PickupShoe' }),
+    pickSourceVmd: chestRestrictSource({ enabled: true, vmdName: 'ub_to_pick' }),
+    pickSourceSkill: chestRestrictSource({ enabled: true, vmdName: 'shoe', skillName: 'Skill_Giantess_PickupShoe' }),
+    pickSourceNone: chestRestrictSource({ enabled: true, vmdName: 'walk', skillName: 'Skill_Giantess_BreastPress' }),
     // v2：skillName 补判定
     skillHit: isChestRestrictActive({ enabled: true, vmdName: 'tighten_leg', skillName: 'Skill_Giantess_Sit_TightenLeg' }),
     skillMiss: isChestRestrictActive({ enabled: true, vmdName: 'walk', skillName: 'Skill_Giantess_BreastPress' }),

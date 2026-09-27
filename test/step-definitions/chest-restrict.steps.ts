@@ -21,6 +21,18 @@ describe('chestPhysicsRestrict 纯函数', () => {
         expect(facts.enabledWalk).toBe(false);
     });
 
+    test('pick 扩展：Pick 相关 vmd / 动作名同样启用，非 pick vmd 不受影响', () => {
+        expect(facts.enabledPickup).toBe(true);
+        expect(facts.enabledPickdown).toBe(true);
+        expect(facts.enabledKeepPick).toBe(true);
+        expect(facts.enabledPickDisabled).toBe(false);
+        expect(facts.enabledStandNotPick).toBe(false);
+        expect(facts.pickSkillHit).toBe(true);
+        expect(facts.pickSourceVmd).toBe('vmd');
+        expect(facts.pickSourceSkill).toBe('skill');
+        expect(facts.pickSourceNone).toBe(null);
+    });
+
     test('自定义 vmdPattern 可覆盖默认', () => {
         expect(facts.customWalk).toBe(true);
     });
