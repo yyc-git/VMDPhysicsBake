@@ -166,8 +166,15 @@ function loadAnim(idx: number) {
     sampleSeq = 0;
     exported = false;
 
-    helper.play(mesh, animName, true);
-    hud.textContent += '\n\n▶ 播放 ' + animName + ' — ' + CFG.vmds.length + ' 个动画中的第 ' + (idx + 1) + ' 个';
+    // RCA 修复（第4轮）：一次性动画（技能 stomp 等）不能 LoopRepeat —— 否则末帧 f30→f0 回绕瞬移，
+    //   kinematic 骨单帧归位 → 头发被甩（实测 i=59→60 链式 469°→725°）。默认 clamp（播完停在末帧）；
+    //   ?loop=1 恢复循环（仅供 walk/idle 等循环动作观察）。
+    const loopPlay = (qp.get('loop') || '0') !== '0';
+    helper.play(mesh, animName, loopPlay);
+    if (!loopPlay) {
+      try { helper.findAnimationAction(mesh, animName).clampWhenFinished = true; } catch { /* ignore */ }
+    }
+    hud.textContent += '\n\n▶ 播放 ' + animName + ' — ' + CFG.vmds.length + ' 个动画中的第 ' + (idx + 1) + ' 个' + (loopPlay ? ' (loop)' : ' (once+clamp)');
   }).catch(e => {
     hud.textContent += '\n❌ VMD 加载失败: ' + e.message;
   });
@@ -210,7 +217,9 @@ function tryExportLog() {
   const cur = helper.objects.get(mesh);
   if (!cur || !cur.mixer) return;
   // 播放结束判定：mixer.time 到达 clip.duration - 0.05（各动画时长不同，不硬编码 2.9）
-  if (cur.mixer.time < curClip.duration - 0.05) return;
+  // RCA 临时插桩：?pad=<秒> 延长录制（含越过 duration 的循环回绕），默认 0 = 原行为
+  const padSec = parseFloat(new URLSearchParams(location.search).get('pad') || '0') || 0;
+  if (cur.mixer.time < curClip.duration - 0.05 + padSec) return;
   exported = true;
   const log = viewBakeLog || [];
   const animName = CFG.vmds[curAnimIdx];

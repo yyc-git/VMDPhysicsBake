@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { Skeleton, SkinnedMesh, Bone, BufferGeometry } from 'three';
 import fs from 'fs';
+import zlib from 'zlib';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { chestRestrictSource, excludeChestBones } from './chest-restrict.mjs';
@@ -30,6 +31,8 @@ function parseCli(argv) {
     else if (a === '--self-check') args.selfCheck = true;
     else if (a === '--chest-physics-restrict') args.chestPhysicsRestrict = true;
     else if (a === '--chest-skill') args.chestSkill = argv[++i];
+    else if (a === '--handoff-vmd') args.handoffVmd = argv[++i];
+    else if (a === '--handoff-frame') args.handoffFrame = argv[++i];
   }
   return args;
 }
@@ -133,6 +136,82 @@ const readBuf = (p) => {
   const buf = fs.readFileSync(p);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 };
+
+// ---- P4 跨 clip 衔接种子（2026-10-01；C1 加固）----
+// 起播/收尾切换时，游戏对旧 clip 的末态与新 clip 的 f0 做 crossfade（甚至 noBlend 硬切）。
+// 独立烘焙的 clip f0 是自身启动瞬态窗后的姿态，与前一 clip 末态可差 90~145°（发链）→ 切换一步甩。
+// 这里用「前一 clip 的指定帧姿态」作为本 clip f0 的物理骨种子：f0=前态，再自然过渡到本 clip 自身姿态，
+// 把边界差降到 ~0；发链回绕（clip 末→f0）仍在稳态内。
+// CLI: --handoff-vmd <前置产物 vmd> [--handoff-frame <n>]（默认 -1 = 前置末帧）。
+// 内置切换图（来源 frontend FSM）：
+//   Data.ts:41-84 base 链 idle→walk→run→walk→idle；技能从 idle 进入、结束后回 idle（data/Data.ts + SkillGiantessMod）。
+//   stomp 链 Stomp→KeepStomp→StompBack→(Idle)（mods/skill-giantess-stomp/src/json/Data.ts:158-205）。
+// 取「最近一次的进入前态」作为该 clip 的种子；生产全量重烘由 step-5 保证前置先生成（见其 handoff 串行段）。
+const HANDOFF_MAP = { walk: 'idle', run: 'walk', idle: 'stomp' };
+// 已知多入边（来源 frontend FSM）：单前置图只能表达一条入边，其余入边仍会跳变 —— 仅告警提示局限。
+const HANDOFF_MULTI_IN = { idle: ['walk', 'run', 'stomp', 'KeepPick'], walk: ['idle', 'run', 'KeepPick'], run: ['idle', 'walk', 'KeepPick'] };
+const handoffSelfName = path.basename(VMD_OUT_PATH, path.extname(VMD_OUT_PATH)).toLowerCase();
+let handoffSeedMap = null;
+// #7：useLoader 分支在下方提前 return 且不走 8b，此处跳过 handoff 读取，避免白读。
+if (config.useLoader !== true) {
+  let handoffSeedPath = cli.handoffVmd ? resolveFrom(SCRIPT_DIR, cli.handoffVmd) : null;
+  if (!handoffSeedPath && HANDOFF_MAP[handoffSelfName]) {
+    const cand = path.join(path.dirname(VMD_OUT_PATH), `${HANDOFF_MAP[handoffSelfName]}.vmd`);
+    if (fs.existsSync(cand)) handoffSeedPath = cand;
+    else console.warn(`[handoff] 前置产物不存在，跳过种子: ${cand}`);
+  }
+  if (handoffSeedPath) {
+    // #2c 新鲜度：前置 mtime 早于本次源 vmd / 早于工具脚本 → 只告警不阻断
+    try {
+      const predM = fs.statSync(handoffSeedPath).mtimeMs;
+      const srcM = fs.statSync(VMD_RAW_PATH).mtimeMs;
+      const toolM = fs.statSync(fileURLToPath(import.meta.url)).mtimeMs;
+      if (predM < srcM || predM < toolM) console.warn(`[handoff] 前置产物可能陈旧(上一轮烘焙): ${path.basename(handoffSeedPath)}（mtime 早于 源vmd/工具）`);
+    } catch (e) { /* stat 失败忽略 */ }
+    // #2b frame 校验：非数字 → 告警并跳过种子（不误扩窗/误报）；越界 → 告警 clamp
+    let want = -1;
+    let frameInvalid = false;
+    if (cli.handoffFrame !== undefined) {
+      const parsed = parseInt(cli.handoffFrame, 10);
+      if (!Number.isFinite(parsed)) { console.warn(`[handoff] --handoff-frame 非法("${cli.handoffFrame}")，跳过种子`); frameInvalid = true; }
+      else want = parsed;
+    }
+    // #2a 前置损坏/半写：读取+解析整体兜底，失败 warn 跳过种子，不中断烘焙
+    if (frameInvalid) { /* 无效帧：不应用种子 */ } else
+    try {
+      const hb = fs.readFileSync(handoffSeedPath);
+      const hbuf = (hb.length && hb[0] === 0x1f && hb[1] === 0x8b) ? zlib.gunzipSync(hb) : hb;
+      if (!hbuf || hbuf.length < 30) throw new Error(`前置文件过小/为空 (${hb.length}B)`);
+      const hvmd = parser.parseVmd(hbuf.buffer.slice(hbuf.byteOffset, hbuf.byteOffset + hbuf.byteLength), true);
+      const allFrames = hvmd.motions.map((m) => m.frameNum);
+      const predMax = allFrames.length ? Math.max(...allFrames) : -1;
+      if (want >= 0 && predMax >= 0 && want > predMax) { console.warn(`[handoff] --handoff-frame ${want} 越界(前置 max=${predMax})，clamp 到末帧`); want = predMax; }
+      if (want < -1) { console.warn(`[handoff] --handoff-frame ${want} 非法，按末帧处理`); want = -1; }
+      const latest = new Map(); // boneName -> { f, q }
+      for (const m of hvmd.motions) {
+        const cur = latest.get(m.boneName);
+        if (want < 0) {
+          if (!cur || m.frameNum > cur.f) latest.set(m.boneName, { f: m.frameNum, q: m.rotation });
+        } else if (m.frameNum <= want && (!cur || m.frameNum > cur.f)) {
+          latest.set(m.boneName, { f: m.frameNum, q: m.rotation });
+        }
+      }
+      if (latest.size) {
+        handoffSeedMap = new Map([...latest].map(([k, v]) => [k, v.q]));
+        console.log(`[handoff] seed from ${path.basename(handoffSeedPath)} frame=${want < 0 ? 'last' : want} bones=${handoffSeedMap.size}`);
+      } else {
+        console.warn(`[handoff] 前置无可用骨骼/帧，跳过种子: ${path.basename(handoffSeedPath)}`);
+      }
+    } catch (e) {
+      handoffSeedMap = null;
+      console.warn(`[handoff] 前置读取/解析失败，跳过种子（烘焙继续）: ${e?.message || e}`);
+    }
+  }
+  // #5b 多入边局限告警
+  if (handoffSeedMap?.size && HANDOFF_MULTI_IN[handoffSelfName] && HANDOFF_MULTI_IN[handoffSelfName].length > 1) {
+    console.warn(`[handoff] ${handoffSelfName} 有多个真实入边 [${HANDOFF_MULTI_IN[handoffSelfName].join(', ')}]，单前置图只覆盖 "${HANDOFF_MAP[handoffSelfName]}"；其余入边仍会跳变（局限）`);
+  }
+}
 
 // ---- useLoader 分支（2026-08-12 v32）：与 demo 页面完全同链路 ----
 // 页面 = MMDLoader.load2 构建 mesh → helper.add(warmup=60,无增强) → play → 每帧 helper.update(1/60) 采样 → bake-from-view 抽帧
@@ -929,6 +1008,14 @@ for (let frame = 0; frame <= maxFrame - 1; frame++) { // v30b：驱动 maxFrame 
 } // v29: frame 循环闭合
 console.log('recorded physics bones:', records.size);
 
+/*! 临时插桩（RCA 用）：BAKE_DUMP_SAMPLES=<path> 时导出逐物理步物理骨 quaternion，供与 demo bone-log 逐帧 diff */
+if (process.env.BAKE_DUMP_SAMPLES) {
+  const dump = {};
+  for (const [n, arr] of records) dump[n] = arr.map((r) => r.rotation);
+  fs.writeFileSync(process.env.BAKE_DUMP_SAMPLES, JSON.stringify(dump));
+  console.log(`[rca-dump] samples written: ${process.env.BAKE_DUMP_SAMPLES} bones=${records.size}`);
+}
+
 // ---- FIX-7：恢复 setStiffness 原型 patch ----
 // bake 结束（约束构造/配置均已用毕）后恢复原型，进程内多次 bakePhysics() 时防 patch 累积
 // （幂等但脏：diag-solver4 的「÷50 err 110」即各 run 间未还原原型累积为 ÷50000 的教训）。
@@ -1005,7 +1092,18 @@ if (typeof physicsParams.skipHeadFrames === 'number') {
 } else {
   skipHeadCutF = computeSkipHeadCutF(records, maxFrame, physicsParams);
 }
-console.log(`[skip-head] 丢弃前导物理输出帧 <= f${skipHeadCutF} (mode=${typeof physicsParams.skipHeadFrames === 'number' ? 'fixed' : 'auto'}, maxFrame=${maxFrame})`);
+// P4：有种子时，把「种子→本 clip 自身姿态」的过渡窗至少拉到 handoffBlendFrames 帧，
+// 避免 idle 这类自身瞬态小（cutF=1）的 clip 在种子后 2 帧内急转（帧率过快）。
+// #3：显式 skipHeadFrames=数字 为 fixed 语义，handoff 扩展不得覆盖；mode 如实打印 fixed+handoff
+const skipHeadFixed = typeof physicsParams.skipHeadFrames === 'number';
+const handoffActive = !!(handoffSeedMap && handoffSeedMap.size);
+if (handoffActive && !skipHeadFixed) {
+  const blend = Math.max(0, Math.floor(config.handoffBlendFrames ?? 8));
+  const before = skipHeadCutF;
+  skipHeadCutF = Math.max(skipHeadCutF, Math.min(blend, Math.floor(physicsParams.skipHeadMaxRatio * maxFrame)));
+  if (skipHeadCutF !== before) console.log(`[handoff] 过渡窗扩展 ${before} → ${skipHeadCutF} 帧`);
+}
+console.log(`[skip-head] 丢弃前导物理输出帧 <= f${skipHeadCutF} (mode=${skipHeadFixed ? 'fixed' : 'auto'}${handoffActive ? '+handoff' : ''}, maxFrame=${maxFrame})`);
 
 // ---- 8. 合并写出 ----
 // SJIS 宽容名：简化汉字（发/饰/侧/头）无 JIS 映射 → '?'（0x3F，游戏既有约定）
@@ -1046,18 +1144,22 @@ for (const name of sortedPhysNames) {
 }
 if (tooLongPhys.length) console.log(`[P3] 跳过 >15 字节骨名 ${tooLongPhys.length} 条: ${tooLongPhys.join(', ')}`);
 if (skippedCollide.length) console.log(`[P3] 跳过与动作骨/已写骨撞名 ${skippedCollide.length} 条: ${skippedCollide.join(', ')}`);
+let handoffSeededCount = 0;
 for (const name of outPhysNameOf.keys()) {
   const recs = records.get(name);
   if (!recs) continue;
   const outName = outPhysNameOf.get(name);
   // v31：抽帧映射按源 maxFrame（非硬编码 90），修复短动画被拉长 / 长动画被截断。
   // resamplePhysicsFrames 为纯函数（src/tool/resample-physics.mjs），保留原 bake-from-view
-  // 语义（SKIP_HEAD / 补帧 0 / 补尾帧）。P1 启动瞬态丢弃窗 skipHeadCutF 作为第 3 参传入（auto 自适应）。
-  const sampled = resamplePhysicsFrames(recs, maxFrame, skipHeadCutF);
+  // 语义。P1 启动瞬态窗 skipHeadCutF + P4 handoff 种子均参数化传入（第 3/4 参）。
+  const seedQ = handoffActive ? (handoffSeedMap.get(outName) || handoffSeedMap.get(name)) : undefined;
+  if (seedQ) handoffSeededCount++; // #2d 种子应用计数
+  const sampled = resamplePhysicsFrames(recs, maxFrame, skipHeadCutF, seedQ);
   for (const s of sampled) {
     outMotions.push({ boneName: outName, frameNum: s.frameNum, position: [0, 0, 0], rotation: s.rotation, interpolation: new Array(64).fill(0) });
   }
 }
+if (handoffActive) console.log(`[handoff] seeded=${handoffSeededCount}/${outPhysNameOf.size}`); // #2d
 
 // 8c. morph 原样复制（78 条，帧与权重逐条一致）
 const morphs = vmdRaw.morphs.map((m) => ({ morphName: m.morphName, frameNum: m.frameNum, weight: m.weight }));
