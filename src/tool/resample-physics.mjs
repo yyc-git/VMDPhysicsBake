@@ -10,7 +10,7 @@
 //（先补 0、再补 maxFrame、最后全部帧）。maxFrame 由调用方传源 VMD 实际值，
 // 不再硬编码 90 —— 修复短动画（<90帧）被拉长、长动画（>90帧）被截断丢帧的问题。
 
-export function resamplePhysicsFrames(recs, maxFrame) {
+export function resamplePhysicsFrames(recs, maxFrame, cutFOpt) {
   const N = recs.length; // 物理步数（如 178）
   if (N < 2) return [];
   const frameMap = new Map();
@@ -18,7 +18,9 @@ export function resamplePhysicsFrames(recs, maxFrame) {
     const animF = Math.round((i * maxFrame) / (N - 1));
     frameMap.set(animF, recs[i].rotation); // 同 animF 后写覆盖
   }
-  const cutF = Math.round(((2 - 1) * maxFrame) / (N - 1)); // SKIP_HEAD=2
+  // cutF：P1 启动瞬态丢弃窗（输出帧语义，bake-physics 传 skipHeadCutF=auto 自适应）；
+  // 未传时保持原 SKIP_HEAD=2 语义（cutF = round(1 * maxFrame / (N-1))）。
+  const cutF = typeof cutFOpt === 'number' ? cutFOpt : Math.round(((2 - 1) * maxFrame) / (N - 1));
   for (const k of [...frameMap.keys()]) if (k <= cutF) frameMap.delete(k);
   const frames = [...frameMap.keys()].sort((a, b) => a - b);
   const out = [];

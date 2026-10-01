@@ -77,7 +77,20 @@ const physicsParams = {
   // 两种修复模式（可同时开）：
   //  - warmupFrames=0：物理从绑定姿态直接开始（复现 MMM 的瞬态上升，最接近 MMM）
   //  - frame0Normalize=true：记录后把所有物理骨 rotation 相对 frame0 归零（frame0 强制=绑定姿态）
-  frame0Normalize: pp.frame0Normalize ?? false
+  frame0Normalize: pp.frame0Normalize ?? false,
+  // ★ P1 修复（2026-10-01）：启动瞬态丢弃窗。
+  //   历史 SKIP_HEAD=2 是「采样条数」，换算到输出帧后对短 clip（walk/stomp 30~32 帧）只删 f0~f1，
+  //   瞬态主体（f3~f8 甩 40~80°）原样保留 → 兄弟报的「前几帧头发甩太大」。
+  //   这里改成「输出帧」语义 + 自适应检测：
+  //    - skipHeadFrames  = 'auto' | number（丢弃的前导输出帧数；number 时直接使用）
+  //    - auto 用逐帧最大摆角信号检测瞬态结束点，阈值 = max(skipHeadThresholdDeg, skipHeadRatio*稳态中位数)
+  //    - skipHeadMaxRatio 限制最多丢弃 clip 的比例（防过删）；skipHeadFloor 为最少丢弃帧数
+  skipHeadFrames: pp.skipHeadFrames ?? 'auto',
+  skipHeadMaxRatio: pp.skipHeadMaxRatio ?? 0.3,
+  skipHeadFloor: pp.skipHeadFloor ?? 1,
+  skipHeadThresholdDeg: pp.skipHeadThresholdDeg ?? 25,
+  skipHeadRatio: pp.skipHeadRatio ?? 2,
+  skipHeadConfirm: pp.skipHeadConfirm ?? 2
 };
 
 // ---- fix5 轮3：temporal kinematic init + kinematic smoothing（config 段）----
@@ -113,7 +126,7 @@ globalThis.Ammo = AmmoModule;
 
 const { MMDParser } = await import('three/examples/jsm/libs/mmdparser.module.js');
 const parser = new MMDParser.Parser();
-const { writeVmd, sanitizeSjis } = await import(pathToFileURL(resolveFrom(SCRIPT_DIR, './vmd-writer.mjs')).href);
+const { writeVmd, sanitizeSjis, encodeSjis } = await import(pathToFileURL(resolveFrom(SCRIPT_DIR, './vmd-writer.mjs')).href);
 const { resamplePhysicsFrames } = await import(pathToFileURL(resolveFrom(SCRIPT_DIR, './resample-physics.mjs')).href);
 
 const readBuf = (p) => {
@@ -421,6 +434,9 @@ console.log('clip tracks:', clip.tracks.length, 'duration:', clip.duration);
 const mixer = new THREE.AnimationMixer(mesh);
 const action = mixer.clipAction(clip);
 action.play();
+// ★ P2 修复（同 helperDriver 分支）：烘焙采样只播一遍，末帧 clamp 住，避免回绕瞬移
+action.setLoop(THREE.LoopOnce, Infinity);
+action.clampWhenFinished = true;
 
 const { CCDIKSolver } = await import('three/examples/jsm/animation/CCDIKSolver.js');
 const ikSolver = new CCDIKSolver(mesh, iks);
@@ -504,6 +520,16 @@ if (helperDriver) {
   });
   helper.configuration.pmxAnimation = true;  // 游戏对 PMX 模型设置（HMS 是 PMX）
   helper.play(mesh, 'pickup', true);         // 启动动画（meta3d 版 _setupMeshAnimation 不自动 play）
+  // ★ P2 修复（2026-10-01）：烘焙时动作只能播一遍，末帧到 duration 时 clamp 住。
+  // 原 loop=true（LoopRepeat）：模拟总时长恰好 = clip.duration（maxFrame 物理步），
+  // 最后一个 substep 的 helper.update 把 action.time 从 duration 回绕到 0 →
+  // 动作骨/kinematic 刚体在一个物理帧内瞬移回起始姿态 → 末帧全骨爆摆（stomp f30 155~175°）。
+  // 游戏内仍需 loop（运行时行为不变），仅烘焙采样这一遍改成 LoopOnce+clampWhenFinished。
+  {
+    const _act = helper.findAnimationAction(mesh, 'pickup');
+    _act.setLoop(THREE.LoopOnce, Infinity);
+    _act.clampWhenFinished = true;
+  }
   if (process.env.V12_DUMP === "1") {
     const skB = bones.find(b => b.name === "スカート_0_1");
     console.log("[v12] play 后 裙子 q=" + (skB ? skB.quaternion.toArray().map(v => v.toFixed(4)).join(",") : "?"));
@@ -928,6 +954,59 @@ if (physicsParams.frame0Normalize) {
   console.log(`frame0Normalize: ${records.size} 条物理骨 rotation 相对 frame0 归零`);
 }
 
+// ---- 7c. P1：启动瞬态丢弃窗（输出帧语义 + 自适应检测）----
+// 采样序号 i（全局物理步 frame*PHYS_SUBSTEP+sub）→ animF 映射与 8b 完全一致；
+// 所有物理骨采样时间戳相同（每骨长度 = N），故可逐 animF 求「全骨最大单步摆角」作为瞬态信号。
+function computeSkipHeadCutF(records, maxFrame, p) {
+  const sampleCount = records.size ? records.values().next().value.length : 0;
+  if (sampleCount < 2) return 0;
+  const animFAt = (i) => Math.round((i * maxFrame) / (sampleCount - 1));
+  const uniqSet = new Set();
+  for (let i = 0; i < sampleCount; i++) uniqSet.add(animFAt(i));
+  const uniqFrames = [...uniqSet].sort((a, b) => a - b);
+  const idxOf = new Map(uniqFrames.map((f, i) => [f, i]));
+  const qByFrame = []; // 每骨在 uniqFrames 上的 quat（同帧后写覆盖，与 8b Map.set 一致）
+  for (const recs of records.values()) {
+    const arr = new Array(uniqFrames.length).fill(null);
+    for (let i = 0; i < recs.length; i++) arr[idxOf.get(animFAt(i))] = recs[i].rotation;
+    qByFrame.push(arr);
+  }
+  const qAngle = (a, b) => 2 * Math.acos(Math.min(1, Math.abs(a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3]))) * 180 / Math.PI;
+  const step = new Array(uniqFrames.length).fill(0);
+  for (let j = 1; j < uniqFrames.length; j++) {
+    let mx = 0;
+    for (const arr of qByFrame) {
+      if (!arr[j] || !arr[j - 1]) continue;
+      const a = qAngle(arr[j - 1], arr[j]);
+      if (a > mx) mx = a;
+    }
+    step[j] = mx;
+  }
+  // 稳态中位数：取后半段正 step（瞬态主要在前段，后半段视为稳态）
+  const tailStart = Math.max(1, Math.floor(uniqFrames.length / 2));
+  const tail = step.slice(tailStart).filter((v) => v > 0).sort((a, b) => a - b);
+  const median = tail.length ? tail[Math.floor(tail.length / 2)] : 0;
+  const thr = Math.max(p.skipHeadThresholdDeg, p.skipHeadRatio * median);
+  // 从前往后扫：记录最后一个异常帧；连续 confirm 个正常帧后判定瞬态结束
+  let lastAnomaly = 0, quiet = 0;
+  for (let j = 1; j < uniqFrames.length; j++) {
+    if (step[j] >= thr) { lastAnomaly = j; quiet = 0; }
+    else { quiet++; if (quiet >= p.skipHeadConfirm) break; }
+  }
+  let cutF = uniqFrames[lastAnomaly];
+  cutF = Math.max(cutF, p.skipHeadFloor);
+  cutF = Math.min(cutF, Math.floor(p.skipHeadMaxRatio * maxFrame));
+  console.log(`[skip-head:auto] 稳态中位数=${median.toFixed(1)}° 阈值=${thr.toFixed(1)}° 前12帧step=[${step.slice(0, 12).map((v) => v.toFixed(0)).join(',')}]`);
+  return cutF;
+}
+let skipHeadCutF;
+if (typeof physicsParams.skipHeadFrames === 'number') {
+  skipHeadCutF = Math.max(0, Math.min(Math.floor(physicsParams.skipHeadFrames), maxFrame));
+} else {
+  skipHeadCutF = computeSkipHeadCutF(records, maxFrame, physicsParams);
+}
+console.log(`[skip-head] 丢弃前导物理输出帧 <= f${skipHeadCutF} (mode=${typeof physicsParams.skipHeadFrames === 'number' ? 'fixed' : 'auto'}, maxFrame=${maxFrame})`);
+
 // ---- 8. 合并写出 ----
 // SJIS 宽容名：简化汉字（发/饰/侧/头）无 JIS 映射 → '?'（0x3F，游戏既有约定）
 // 原始动作骨名可编码则原样；冲突检测用原始名，输出用宽容名
@@ -948,16 +1027,33 @@ for (const m of vmdRaw.motions) {
 
 // 8b. 物理骨逐帧：position 恒 [0,0,0]（MMD 物理骨约定：只写 rotation，位置由 PMX 绑定+父骨链决定），rotation=quaternion，interpolation=全0
 const sortedPhysNames = [...physicsBoneNames].sort();
+// ★ P3 修复（2026-10-01）：VMD 骨名字段固定 15 字节，writeVmd 对超长名静默截断。
+// 本模型 RightClothEarA01..A05（16B）全被截成 RightClothEarA0 → 同一骨名写出 5 个块，
+// 段内同帧值不同 → 同帧冲突 key（150 keys / 120 帧冲突）。
+// 对齐 bake-from-view.cjs 的 sjisLenOk 语义：超长骨名跳过 + 告警（运行时由 MMD 物理引擎驱动）。
 const outPhysNameOf = new Map(); // 原始名 → 输出名（宽容名）
-for (const name of sortedPhysNames) outPhysNameOf.set(name, sjisSafeName(name));
+const usedOutNames = new Set(outMotions.map((m) => m.boneName)); // 8a 已写出的动作骨名（物理骨同名动作帧已被 8a 丢弃，不在此列）
+const tooLongPhys = [];
+const skippedCollide = [];
 for (const name of sortedPhysNames) {
+  const outName = sjisSafeName(name);
+  let byteLen = 0;
+  try { byteLen = encodeSjis(outName).length; } catch { byteLen = Infinity; }
+  if (byteLen > 15) { tooLongPhys.push(`${name}(->${outName},${byteLen}B)`); continue; }
+  if (usedOutNames.has(outName)) { skippedCollide.push(`${name}(->${outName})`); continue; }
+  usedOutNames.add(outName);
+  outPhysNameOf.set(name, outName);
+}
+if (tooLongPhys.length) console.log(`[P3] 跳过 >15 字节骨名 ${tooLongPhys.length} 条: ${tooLongPhys.join(', ')}`);
+if (skippedCollide.length) console.log(`[P3] 跳过与动作骨/已写骨撞名 ${skippedCollide.length} 条: ${skippedCollide.join(', ')}`);
+for (const name of outPhysNameOf.keys()) {
   const recs = records.get(name);
   if (!recs) continue;
   const outName = outPhysNameOf.get(name);
   // v31：抽帧映射按源 maxFrame（非硬编码 90），修复短动画被拉长 / 长动画被截断。
   // resamplePhysicsFrames 为纯函数（src/tool/resample-physics.mjs），保留原 bake-from-view
-  // 语义（SKIP_HEAD=2 / 补帧 0 / 补尾帧）。pickup(maxFrame=90) 行为不变。
-  const sampled = resamplePhysicsFrames(recs, maxFrame);
+  // 语义（SKIP_HEAD / 补帧 0 / 补尾帧）。P1 启动瞬态丢弃窗 skipHeadCutF 作为第 3 参传入（auto 自适应）。
+  const sampled = resamplePhysicsFrames(recs, maxFrame, skipHeadCutF);
   for (const s of sampled) {
     outMotions.push({ boneName: outName, frameNum: s.frameNum, position: [0, 0, 0], rotation: s.rotation, interpolation: new Array(64).fill(0) });
   }
@@ -999,9 +1095,13 @@ function selfCheck(outBytes) {
   // 物理骨回读名 = 宽容名（outPhysNameOf）
   const outNames = [...new Set(outPhysNameOf.values())];
   const physNamesPresent = outNames.filter((n) => byName.has(n));
-  const assertPhysCount = physNamesPresent.length >= sortedPhysNames.length;
-  // 物理骨帧数 = maxFrame（不是 maxFrame+1）：bake-from-view 的 SKIP_HEAD=2 删掉 1 帧（补帧 0 前）是预期行为
-  const frameOk = physNamesPresent.every((n) => byName.get(n).length === maxFrame);
+  const assertPhysCount = physNamesPresent.length >= outPhysNameOf.size;
+  // P1：丢弃前导瞬态窗后，每骨 key 数 = 补帧0 + (cutF+1..maxFrame)；P3：同帧唯一
+  const expectedKeys = maxFrame - skipHeadCutF + 1;
+  const frameOk = physNamesPresent.every((n) => {
+    const fs_ = byName.get(n).map((m) => m.frameNum);
+    return fs_.length === expectedKeys && new Set(fs_).size === fs_.length;
+  });
   const frameRangeOk = physNamesPresent.every((n) => {
     const fs_ = byName.get(n).map((m) => m.frameNum);
     return Math.min(...fs_) === 0 && Math.max(...fs_) === maxFrame;
@@ -1035,8 +1135,8 @@ function selfCheck(outBytes) {
     if (!posRelOk) break;
   }
   console.log('--- self-check ---');
-  console.log(`physics bones present: ${physNamesPresent.length}/${sortedPhysNames.length} (${assertPhysCount ? 'OK' : 'FAIL'})`);
-  console.log(`each physics bone frames: ${frameOk ? `OK (${maxFrame})` : 'FAIL'}`);
+  console.log(`physics bones present: ${physNamesPresent.length}/${outPhysNameOf.size} (${assertPhysCount ? 'OK' : 'FAIL'})`);
+  console.log(`each physics bone frames unique: ${frameOk ? `OK (${expectedKeys})` : 'FAIL'}`);
   console.log(`frame range 0..${maxFrame}: ${frameRangeOk ? 'OK' : 'FAIL'}`);
   console.log(`morph count: ${back.morphs.length} (${morphCountOk ? 'OK' : 'FAIL'})`);
   console.log(`action bone preserved (non-physics): ${actionBoneTotal} frames ${actionBoneOk ? 'OK' : 'FAIL'}`);
