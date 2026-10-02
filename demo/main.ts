@@ -190,6 +190,8 @@ let sampleSeq = 0;
 // 记录状态（模块级，非全局）：纯页面内部状态，无外部脚本读取（FIX-4：__viewBakeLog/__viewBakeFrame 收敛）
 let viewBakeLog: any[] = [];
 let viewBakeFrame = 0;
+(window as any).__vbl = undefined;
+Object.defineProperty(window, '__vbl', { get: () => viewBakeLog }); // 诊断: getter 每次读当前数组(防 L164/L335 重赋值脱钩)
 
 function recordPhysicsFrame() {
   const obj = helper.objects.get(mesh!);
@@ -243,7 +245,11 @@ function tryExportLog() {
     curAnimIdx++;
     loadAnim(curAnimIdx);
   }).catch(e => {
-    hud.textContent += '\n❌ 导出失败: ' + e.message;
+    // 导出是可选步骤：dev-server 无 /api/save-bone-log（404）时不应中断多动画序列，
+    // 打 warn 后继续下一段，保证 vmds=a,b,c 能全部播完。
+    hud.textContent += '\n⚠️ 导出失败(可选步骤，继续下一段): ' + e.message;
+    curAnimIdx++;
+    loadAnim(curAnimIdx);
   });
 }
 

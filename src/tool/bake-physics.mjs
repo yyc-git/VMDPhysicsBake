@@ -147,7 +147,7 @@ const readBuf = (p) => {
 //   Data.ts:41-84 base 链 idle→walk→run→walk→idle；技能从 idle 进入、结束后回 idle（data/Data.ts + SkillGiantessMod）。
 //   stomp 链 Stomp→KeepStomp→StompBack→(Idle)（mods/skill-giantess-stomp/src/json/Data.ts:158-205）。
 // 取「最近一次的进入前态」作为该 clip 的种子；生产全量重烘由 step-5 保证前置先生成（见其 handoff 串行段）。
-const HANDOFF_MAP = { walk: 'idle', run: 'walk', idle: 'stomp' };
+const HANDOFF_MAP = { walk: 'idle', run: 'walk', idle: 'stomp', keep_stomp: 'stomp', stomp_back: 'keep_stomp' };
 // 已知多入边（来源 frontend FSM）：单前置图只能表达一条入边，其余入边仍会跳变 —— 仅告警提示局限。
 const HANDOFF_MULTI_IN = { idle: ['walk', 'run', 'stomp', 'KeepPick'], walk: ['idle', 'run', 'KeepPick'], run: ['idle', 'walk', 'KeepPick'] };
 const handoffSelfName = path.basename(VMD_OUT_PATH, path.extname(VMD_OUT_PATH)).toLowerCase();
@@ -1073,7 +1073,10 @@ function computeSkipHeadCutF(records, maxFrame, p) {
   const tailStart = Math.max(1, Math.floor(uniqFrames.length / 2));
   const tail = step.slice(tailStart).filter((v) => v > 0).sort((a, b) => a - b);
   const median = tail.length ? tail[Math.floor(tail.length / 2)] : 0;
-  const thr = Math.max(p.skipHeadThresholdDeg, p.skipHeadRatio * median);
+  // P5 阈值 cap（2026-10-01）：短 clip / 全段狂野 sim 的 median 自身巨大，2×median 阈值永不触发（keep_stomp 实测 median=141.4° → thr=282.7° > 所有 step → cutF 只到 f1，瞬态窗整段放行）。
+  // cap 只压高 median 场景；正常 clip（median 小，thr=skipHeadFloor 档）不受影响。
+  const thrRaw = p.skipHeadRatio * median;
+  const thr = Math.min(Math.max(p.skipHeadThresholdDeg, thrRaw), p.skipHeadThresholdCap ?? 45);
   // 从前往后扫：记录最后一个异常帧；连续 confirm 个正常帧后判定瞬态结束
   let lastAnomaly = 0, quiet = 0;
   for (let j = 1; j < uniqFrames.length; j++) {
@@ -1083,7 +1086,7 @@ function computeSkipHeadCutF(records, maxFrame, p) {
   let cutF = uniqFrames[lastAnomaly];
   cutF = Math.max(cutF, p.skipHeadFloor);
   cutF = Math.min(cutF, Math.floor(p.skipHeadMaxRatio * maxFrame));
-  console.log(`[skip-head:auto] 稳态中位数=${median.toFixed(1)}° 阈值=${thr.toFixed(1)}° 前12帧step=[${step.slice(0, 12).map((v) => v.toFixed(0)).join(',')}]`);
+  console.log(`[skip-head:auto] 稳态中位数=${median.toFixed(1)}° 阈值=${thr.toFixed(1)}°(raw=${thrRaw.toFixed(1)},cap=${p.skipHeadThresholdCap ?? 45}) 前12帧step=[${step.slice(0, 12).map((v) => v.toFixed(0)).join(',')}]`);
   return cutF;
 }
 let skipHeadCutF;
@@ -1144,6 +1147,48 @@ for (const name of sortedPhysNames) {
 }
 if (tooLongPhys.length) console.log(`[P3] 跳过 >15 字节骨名 ${tooLongPhys.length} 条: ${tooLongPhys.join(', ')}`);
 if (skippedCollide.length) console.log(`[P3] 跳过与动作骨/已写骨撞名 ${skippedCollide.length} 条: ${skippedCollide.join(', ')}`);
+// ---- P5: 循环 clip 末帧收敛到 f0（loop seam 修复, 2026-10-01）----
+// 实测产物 walk(f32)→walk(f0) 头发 gap=30.2°：LoopRepeat 每圈 0.67s 一次跳变 → 「持续走动反复大甩」。
+// 末 LOOP_TAIL_FRAMES 帧 smoothstep 收敛到 f0 姿态，fmax==f0 → wrap 缝隙=0；只作用于 Hair 物理骨。
+// 幂等：每次从 sim 重算后确定性应用（写前门禁与落盘仍由调用方/step-5 mtime guard 保证）。
+const LOOP_TAIL_FRAMES = 8;
+const loopTailActive = ['walk', 'run'].includes(handoffSelfName);
+// P6 落地收敛（2026-10-01）：stomp(踩地保持) 结尾收势到 idle f0（=stomp f0 种子 = idle 入口姿态）。
+// 产物实测 stomp(f30)→idle(f0) 链角=22°/步长5-19°/帧，兄弟反馈「脚离开地面那几帧头发大甩」的 clip 内余量；
+// keep/back 末段已自然收敛(~0)不动，stomp 结尾强制回位。只作用于 Hair 物理骨。
+const LAND_TAIL_FRAMES = 10;
+const landTailActive = handoffSelfName === 'stomp';
+const slerpQuat = (a, b, t) => {
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  let bb = b;
+  if (d < 0) { d = -d; bb = [-b[0], -b[1], -b[2], -b[3]]; }
+  if (d > 0.9995) {
+    const q = [a[0] + (bb[0] - a[0]) * t, a[1] + (bb[1] - a[1]) * t, a[2] + (bb[2] - a[2]) * t, a[3] + (bb[3] - a[3]) * t];
+    const n = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+    return [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
+  }
+  const th = Math.acos(Math.min(1, d)), s = Math.sin(th);
+  const w1 = Math.sin((1 - t) * th) / s, w2 = Math.sin(t * th) / s;
+  return [a[0] * w1 + bb[0] * w2, a[1] * w1 + bb[1] * w2, a[2] * w1 + bb[2] * w2, a[3] * w1 + bb[3] * w2];
+};
+// ---- P7: 头发摆幅收敛（2026-10-01）----
+// 兄弟反馈 walk/stomp「头发飘动范围太大」：产物实测 DaFeng walk 逐帧 36°/帧、链角 43°（相对 f0），
+// keep/back 更甚 49°/帧、链角 73°。物理 sim 的头发能量直接烘焙进产物即观感大甩。
+// 在输出阶段对 hair 骨做投影式钳制（幂等：投影后重跑不变）：
+//   #1 链角：相对 f0 的偏离角 <= hairMaxChainDeg（限制「范围」）
+//   #2 逐帧角速度：相邻输出帧角 <= hairMaxVelDeg（限制「甩速」）
+// 只作用 hair 骨（hairRe），腿/身体/裙摆/胸不碰；阈值可经 physicsParams.hairMaxVelDeg / hairMaxChainDeg 覆盖，禁硬编码角色。
+const HAIR_RE = /Hair|髪|发|毛|テール|pony|braid|辫|Ahoge|アホ/i;
+const hairMaxVelDeg = pp.hairMaxVelDeg ?? 15;
+const hairMaxChainDeg = pp.hairMaxChainDeg ?? 20;
+const hairAmpEnabled = hairMaxVelDeg > 0 && hairMaxChainDeg > 0;
+const angDegQ = (a, b) => { const d = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]); return 2 * Math.acos(Math.min(1, d)) * 180 / Math.PI; };
+const capAngleQ = (q, ref, lim) => { const a = angDegQ(q, ref); if (a <= lim) return q; return slerpQuat(q, ref, 1 - lim / a); };
+let ampClampBones = 0;
+let ampResidualMax = 0;
+let ampGateFail = false;
+let loopTailBones = 0;
+let landTailBones = 0;
 let handoffSeededCount = 0;
 for (const name of outPhysNameOf.keys()) {
   const recs = records.get(name);
@@ -1155,11 +1200,59 @@ for (const name of outPhysNameOf.keys()) {
   const seedQ = handoffActive ? (handoffSeedMap.get(outName) || handoffSeedMap.get(name)) : undefined;
   if (seedQ) handoffSeededCount++; // #2d 种子应用计数
   const sampled = resamplePhysicsFrames(recs, maxFrame, skipHeadCutF, seedQ);
+  // P7：hair 摆幅收敛（作用于纯函数输出数组；ref=首 key。纯函数已补0，首项姿态=原 frameMap refKey 语义等价）
+  if (hairAmpEnabled && HAIR_RE.test(outName) && sampled.length >= 2) {
+    const q0 = sampled[0].rotation;
+    let prevQ = q0;
+    for (const s of sampled) {
+      if (s.rotation === prevQ && s === sampled[0]) { prevQ = s.rotation; continue; }
+      const qc = capAngleQ(capAngleQ(s.rotation, q0, hairMaxChainDeg), prevQ, hairMaxVelDeg);
+      s.rotation = qc;
+      prevQ = qc;
+    }
+    let prev = q0, mxV = 0, mxC = 0;
+    for (const s of sampled) {
+      if (s === sampled[0]) { prev = s.rotation; continue; }
+      mxV = Math.max(mxV, angDegQ(s.rotation, prev));
+      mxC = Math.max(mxC, angDegQ(s.rotation, q0));
+      prev = s.rotation;
+    }
+    ampResidualMax = Math.max(ampResidualMax, mxV, mxC);
+    if (mxV > hairMaxVelDeg + 0.5 || mxC > hairMaxChainDeg + 0.5) ampGateFail = true;
+    ampClampBones++;
+  }
+  // P5：循环 clip 尾帧收敛（仅 Hair），fmax 精确 == f0
+  if (loopTailActive && /Hair/i.test(outName) && sampled.length >= 2) {
+    const q0 = (sampled.find((x) => x.frameNum === 0) || sampled[0]).rotation;
+    const tailStart = Math.max(1, maxFrame - LOOP_TAIL_FRAMES);
+    for (const s of sampled) {
+      if (s.frameNum < tailStart) continue;
+      const t = (s.frameNum - tailStart) / Math.max(1, maxFrame - tailStart);
+      const w = t * t * (3 - 2 * t);
+      s.rotation = slerpQuat(s.rotation, q0, w);
+    }
+    loopTailBones++;
+  }
+  // P6：stomp 落地尾收敛到 f0（=idle 入口姿态），消 clip 内结尾 5-19°/帧回摆
+  if (landTailActive && /Hair/i.test(outName) && sampled.length >= 2) {
+    const q0 = (sampled.find((x) => x.frameNum === 0) || sampled[0]).rotation;
+    const tailStart = Math.max(1, maxFrame - LAND_TAIL_FRAMES);
+    for (const s of sampled) {
+      if (s.frameNum < tailStart) continue;
+      const t = (s.frameNum - tailStart) / Math.max(1, maxFrame - tailStart);
+      const w = t * t * (3 - 2 * t);
+      s.rotation = slerpQuat(s.rotation, q0, w);
+    }
+    landTailBones++;
+  }
   for (const s of sampled) {
     outMotions.push({ boneName: outName, frameNum: s.frameNum, position: [0, 0, 0], rotation: s.rotation, interpolation: new Array(64).fill(0) });
   }
 }
 if (handoffActive) console.log(`[handoff] seeded=${handoffSeededCount}/${outPhysNameOf.size}`); // #2d
+if (loopTailBones > 0) console.log(`[loop-tail] 收敛末${LOOP_TAIL_FRAMES}帧→f0, hair骨=${loopTailBones} (clip=${handoffSelfName})`); // P5
+if (landTailBones > 0) console.log(`[land-tail] stomp收敛末${LAND_TAIL_FRAMES}帧→f0, hair骨=${landTailBones}`); // P6
+if (ampClampBones > 0) console.log(`[amp] hair摆幅收敛 vel<=${hairMaxVelDeg}°/帧 chain<=${hairMaxChainDeg}°, hair骨=${ampClampBones}, 残差max=${ampResidualMax.toFixed(2)}°`); // P7
 
 // 8c. morph 原样复制（78 条，帧与权重逐条一致）
 const morphs = vmdRaw.morphs.map((m) => ({ morphName: m.morphName, frameNum: m.frameNum, weight: m.weight }));
@@ -1180,7 +1273,11 @@ for (const m of outMotions) {
 // ---- 9. 写出（self-check 模式不落盘，纯内存校验）----
 const outBytes = writeVmd('pickup_bake', outMotions, morphs);
 physics.dispose();
-if (!cli.selfCheck) {
+if (ampGateFail) {
+  // P7 写前门禁：收敛后仍超限说明钳制逻辑被破坏/被后续步骤覆盖 → 拒绝落盘（防脏数据）
+  console.error('[amp-gate] FAIL: hair 摆幅收敛后仍超限，拒绝落盘');
+  process.exitCode = 1;
+} else if (!cli.selfCheck) {
   fs.mkdirSync(path.dirname(VMD_OUT_PATH), { recursive: true });
   fs.writeFileSync(VMD_OUT_PATH, outBytes);
   console.log(`written: ${VMD_OUT_PATH} (${outBytes.length} bytes) motions=${outMotions.length} morphs=${morphs.length}`);
